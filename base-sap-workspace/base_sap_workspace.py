@@ -1,4 +1,4 @@
-"""One-file Windows desktop workspace. No SAP search is implemented yet."""
+"""Base + native SAP GUI workspace. Opens ME29N; never automates Release/Save."""
 import os
 import re
 import sys
@@ -8,7 +8,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
-from PySide6.QtCore import Qt, QThread, QUrl, Signal, QAbstractTableModel, QModelIndex
+from PySide6.QtCore import Qt, QThread, QUrl, Signal, QAbstractTableModel, QModelIndex, QObject, QTimer
 from PySide6.QtGui import QPixmap, QIcon, QFont
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -220,6 +220,498 @@ class Loader(QThread):
             self.token = ''
 
 
+SAP_LOGON_PATH = r'C:\Program Files (x86)\SAP\FrontEnd\SAPgui\saplogon.exe'
+SAP_CONNECTION = 'PRD800'
+
+
+def sap_find(node, control_id):
+    try:
+        return node.FindById(control_id, False)
+    except Exception:
+        return None
+
+
+def sap_named(node, name, kind):
+    try:
+        return node.FindByName(name, kind)
+    except Exception:
+        return None
+
+
+def sap_children(node):
+    return [node.Children(i) for i in range(int(node.Children.Count))]
+
+
+def sap_text(value):
+    import unicodedata
+    return ''.join(c for c in unicodedata.normalize('NFD', str(value or '').lower())
+                   if unicodedata.category(c) != 'Mn')
+
+
+class SapNavigationError(RuntimeError):
+    pass
+
+
+class SapNavigator:
+    """Bounded, read/open-only ME29N navigation. Never presses Release/Save."""
+    def __init__(self, po, clock=None):
+        if not re.fullmatch(r'[0-9]{10}', po):
+            raise SapNavigationError('PO phải gồm đúng 10 chữ số.')
+        self.po = po
+        self.clock = clock or __import__('time').monotonic
+        self.phase = 'start'
+        self.deadline = self.clock() + 25
+
+    def select_dialog(self, session):
+        modal = sap_find(session, 'wnd[1]')
+        field = sap_find(session, 'wnd[1]/usr/ctxtMEPO_SELECT-EBELN')
+        return (modal, field) if modal is not None and field is not None else (None, None)
+
+    def current_po(self, main):
+        for name in ('MEPO_TOPLINE-EBELN', 'EKKO-EBELN', 'MEPOHEADER-EBELN'):
+            for kind in ('GuiCTextField', 'GuiTextField'):
+                field = sap_named(main, name, kind)
+                if field is not None:
+                    value = str(field.Text).strip()
+                    if re.fullmatch(r'[0-9]{10}', value):
+                        return value
+        # SAP's document title can also provide positive confirmation.
+        values = re.findall(r'(?<!\d)(\d{10})(?!\d)', str(main.Text))
+        return values[0] if len(values) == 1 else None
+
+    def other_document_button(self, session):
+        toolbar = sap_find(session, 'wnd[0]/tbar[1]')
+        if toolbar is None:
+            return None
+        allowed = ('other purchase order', 'other document', 'select document',
+                   'other po', 'purchase order selection', 'chung tu khac',
+                   'don hang khac', 'chon chung tu')
+        for button in sap_children(toolbar):
+            if str(button.Type) != 'GuiButton':
+                continue
+            label = sap_text(str(getattr(button, 'Tooltip', '')) + ' ' + str(getattr(button, 'Text', '')))
+            if any(word in label for word in ('release', 'approve', 'save', 'duyet')):
+                continue
+            if any(term in label for term in allowed):
+                return button
+        return None
+
+    def step(self, session):
+        if session.Busy:
+            if self.clock() > self.deadline:
+                raise SapNavigationError('SAP xử lý quá lâu. Kiểm tra cửa sổ SAP rồi thử lại.')
+            return None
+        main = sap_find(session, 'wnd[0]')
+        if main is None:
+            raise SapNavigationError('Không tìm thấy cửa sổ chính của SAP.')
+        modal, field = self.select_dialog(session)
+        modals = [w for w in sap_children(session) if str(w.Type) == 'GuiModalWindow']
+        unexpected_modal = (any(str(w.Id) != str(modal.Id) for w in modals)
+                            if modal is not None else bool(modals))
+        if unexpected_modal:
+            raise SapNavigationError('SAP đang có hộp thoại khác. Xử lý trực tiếp trên SAP rồi bấm tìm lại.')
+        status = sap_find(session, 'wnd[0]/sbar')
+        if self.phase != 'start' and status is not None and str(status.MessageType) in ('E', 'A'):
+            raise SapNavigationError('SAP báo lỗi: ' + str(status.Text))
+        if self.phase == 'start':
+            if modal is not None:
+                self.phase = 'fill'
+            elif str(session.Info.Transaction).upper() == 'ME29N':
+                self.phase = 'open'
+            else:
+                session.StartTransaction('ME29N')
+                self.phase = 'transaction'
+            return None
+        if self.phase == 'transaction':
+            if str(session.Info.Transaction).upper() == 'ME29N':
+                self.phase = 'open'
+            elif self.clock() > self.deadline:
+                raise SapNavigationError('Chưa mở được ME29N. Kiểm tra quyền transaction trên SAP.')
+            return None
+        if self.phase == 'open':
+            if modal is not None:
+                self.phase = 'fill'
+                return None
+            if self.current_po(main) == self.po:
+                return ('verified', 'ME29N đang hiển thị đúng PO ' + self.po + '.')
+            button = self.other_document_button(session)
+            if button is None:
+                raise SapNavigationError('Không nhận diện được nút Other Purchase Order. '
+                    'Bạn bấm nút chọn chứng từ trên SAP thủ công, rồi bấm Tìm nhiệm vụ SAP lại.')
+            button.Press()
+            self.phase = 'dialog'
+            self.deadline = self.clock() + 12
+            return None
+        if self.phase == 'dialog':
+            if modal is not None:
+                self.phase = 'fill'
+            elif self.clock() > self.deadline:
+                raise SapNavigationError('Chưa mở được hộp chọn PO trên SAP.')
+            return None
+        if self.phase == 'fill':
+            if modal is None or field is None:
+                raise SapNavigationError('Hộp chọn PO đã thay đổi. Bấm tìm lại.')
+            container = sap_find(session, 'wnd[1]/usr')
+            if container is not None:
+                for control in sap_children(container):
+                    if str(control.Type) == 'GuiRadioButton' and sap_text(control.Text).strip() in (
+                            'pur. order', 'purchase order', 'don mua hang', 'don dat hang'):
+                        control.Select()
+            if not field.Changeable:
+                raise SapNavigationError('Chọn loại Pur. Order trong hộp SAP rồi bấm tìm lại.')
+            field.Text = self.po
+            self.phase = 'submit'
+            return None
+        if self.phase == 'submit':
+            if modal is None or field is None or str(field.Text).strip() != self.po:
+                raise SapNavigationError('PO trong hộp chọn SAP không khớp yêu cầu.')
+            # Enter ONLY in the positively identified document-selection dialog.
+            modal.SendVKey(0)
+            self.phase = 'verify'
+            self.deadline = self.clock() + 15
+            return None
+        if self.phase == 'verify':
+            if modal is None and str(session.Info.Transaction).upper() == 'ME29N':
+                shown = self.current_po(main)
+                if shown == self.po:
+                    return ('verified', 'Đã mở ME29N và xác minh PO ' + self.po + '.')
+                if self.clock() > self.deadline:
+                    if shown:
+                        raise SapNavigationError('SAP đang hiển thị PO khác: ' + shown + '. Chưa xác nhận kết quả.')
+                    return ('unverified', 'Đã gửi yêu cầu mở PO ' + self.po
+                            + ', nhưng chưa đọc được số PO để xác minh. Kiểm tra trên SAP.')
+            elif self.clock() > self.deadline:
+                raise SapNavigationError('SAP vẫn đang ở hộp chọn chứng từ. Kiểm tra thông báo trên SAP.')
+        return None
+
+
+class SapController(QObject):
+    status_changed = Signal(str)
+    window_ready = Signal(object)
+    navigation_changed = Signal()
+    navigation_finished = Signal(int, str, str, str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.path, self.entry = SAP_LOGON_PATH, SAP_CONNECTION
+        self.engine = self.connection = self.session = None
+        self.mode = 'disconnected'
+        self.pending = None
+        self.navigator = None
+        self.sequence = 0
+        self.handle = None
+        self.com = None
+        self.opened = False
+        self.initial_connections = set()
+        self.timer = QTimer(self)
+        self.timer.setInterval(250)
+        self.timer.timeout.connect(self.poll)
+
+    @property
+    def navigation_active(self):
+        return self.pending is not None
+
+    def connect_sap(self):
+        if self.session is not None:
+            try:
+                self.status_changed.emit('Đang dùng kết nối SAP ' + self.entry + '.')
+                self.show_window()
+            except Exception:
+                self.fail('Phiên SAP không còn sẵn sàng. Kiểm tra SAP Logon rồi kết nối lại.')
+            return
+        if self.mode in ('engine', 'connection', 'login'):
+            return
+        if sys.platform != 'win32':
+            self.fail('SAP GUI nhúng chỉ chạy trên Windows.')
+            return
+        try:
+            import pythoncom
+            import win32com.client
+            if self.com is None:
+                pythoncom.CoInitialize()
+                self.com = pythoncom
+            self.dispatch = win32com.client
+            try:
+                self.engine = self.dispatch.GetObject('SAPGUI').GetScriptingEngine
+            except Exception:
+                path = Path(self.path)
+                if not path.is_file():
+                    self.fail('Không tìm thấy saplogon.exe. Kiểm tra Cài đặt → SAP GUI.')
+                    return
+                __import__('subprocess').Popen([str(path)])
+            self.mode = 'engine'
+            self.deadline = __import__('time').monotonic() + 60
+            self.status_changed.emit('Đang mở SAP Logon. Chờ kết nối ' + self.entry + '…')
+            self.timer.start()
+        except ImportError:
+            self.fail('Thiếu pywin32. Chạy: python -m pip install pywin32')
+        except Exception:
+            self.fail('Không truy cập được SAP GUI Scripting. Kiểm tra cài đặt Scripting trên máy.')
+
+    def request_po(self, po):
+        self.sequence += 1
+        self.cancel_navigation()
+        self.pending = (self.sequence, po)
+        self.navigator = None
+        self.navigation_changed.emit()
+        # Defer so the UI records the Base source before any result is emitted.
+        QTimer.singleShot(0, self.begin_pending)
+        return self.sequence
+
+    def begin_pending(self):
+        if self.pending is None:
+            return
+        if self.session is None:
+            self.connect_sap()
+        else:
+            self.timer.start()
+
+    def cancel_navigation(self):
+        if self.pending is not None:
+            request_id, po = self.pending
+            self.pending = self.navigator = None
+            self.navigation_changed.emit()
+            self.navigation_finished.emit(request_id, po, 'cancelled',
+                'Đã dừng yêu cầu mở PO. Màn hình SAP có thể vẫn giữ chứng từ trước đó.')
+
+    def finish_navigation(self, status, message):
+        if self.pending is None:
+            return
+        request_id, po = self.pending
+        self.pending = self.navigator = None
+        self.navigation_changed.emit()
+        self.navigation_finished.emit(request_id, po, status, message)
+
+    def fail(self, message):
+        self.status_changed.emit(message)
+        self.mode = 'disconnected'
+        self.opened = False
+        self.timer.stop()
+        self.engine = self.connection = self.session = None
+        self.handle = None
+        self.finish_navigation('error', message)
+
+    def show_window(self):
+        if self.session is not None and not self.session.Busy:
+            main = sap_find(self.session, 'wnd[0]')
+            if main is not None:
+                handle = str(main.Handle)
+                self.window_ready.emit(int(handle, 16) if handle.lower().startswith('0x') else int(handle))
+
+    def poll(self):
+        try:
+            now = __import__('time').monotonic()
+            if self.mode == 'engine':
+                if self.engine is None:
+                    try:
+                        self.engine = self.dispatch.GetObject('SAPGUI').GetScriptingEngine
+                    except Exception:
+                        if now > self.deadline:
+                            self.fail('Chưa truy cập được SAP Logon. Kiểm tra SAP GUI Scripting, rồi thử lại.')
+                        return
+                if not self.opened:
+                    self.initial_connections = {str(c.Id) for c in sap_children(self.engine)}
+                    self.connection = self.engine.OpenConnection(self.entry, False)
+                    self.opened = True
+                self.mode = 'connection'
+                self.deadline = now + 60
+            if self.mode == 'connection':
+                if self.connection is None:
+                    choices = [c for c in sap_children(self.engine)
+                        if str(c.Id) not in self.initial_connections and str(c.Description).strip() == self.entry]
+                    if len(choices) > 1:
+                        self.fail('Có nhiều kết nối SAP mới cùng tên. Đóng kết nối thừa rồi thử lại.')
+                        return
+                    if choices:
+                        self.connection = choices[0]
+                if self.connection is not None:
+                    if self.connection.DisabledByServer:
+                        self.fail('SAP GUI Scripting bị tắt trên server. Cần quản trị SAP cho phép trước khi điều khiển.')
+                        return
+                    sessions = sap_children(self.connection)
+                    if sessions:
+                        self.session = sessions[0]
+                        self.mode = 'login'
+                        self.status_changed.emit('Đăng nhập trực tiếp trong cửa sổ SAP. App không đọc mật khẩu.')
+                if self.session is None and now > self.deadline:
+                    self.fail('Chưa mở được kết nối ' + self.entry + '. Kiểm tra cấu hình SAP Logon và mạng.')
+                return
+            if self.session is None:
+                return
+            if self.session.Busy:
+                if self.navigator is not None:
+                    self.navigator.step(self.session)  # Enforce timeout while SAP remains busy.
+                return
+            main = sap_find(self.session, 'wnd[0]')
+            if main is not None:
+                raw = str(main.Handle)
+                handle = int(raw, 16) if raw.lower().startswith('0x') else int(raw)
+                if handle != self.handle:
+                    self.handle = handle
+                    self.window_ready.emit(handle)
+            if not str(self.session.Info.User).strip():
+                return
+            if self.mode != 'ready':
+                self.mode = 'ready'
+                self.status_changed.emit('SAP đã đăng nhập: ' + str(self.session.Info.SystemName)
+                    + ' / client ' + str(self.session.Info.Client) + '. Chỉ mở PO, không tự duyệt.')
+            if self.pending is not None:
+                if self.navigator is None:
+                    self.navigator = SapNavigator(self.pending[1])
+                result = self.navigator.step(self.session)
+                if result is not None:
+                    self.finish_navigation(*result)
+        except SapNavigationError as exc:
+            self.finish_navigation('error', str(exc))
+        except Exception:
+            # COM errors may contain connection strings: never print raw errors.
+            self.opened = False
+            self.fail('Không điều khiển được SAP. Kiểm tra hộp thoại SAP, phiên đăng nhập và quyền GUI Scripting.')
+
+    def shutdown(self):
+        self.timer.stop()
+        self.pending = self.navigator = None
+        self.session = self.connection = self.engine = None
+        if self.com is not None:
+            self.com.CoUninitialize()
+            self.com = None
+
+
+class Win32SapWindow:
+    def __init__(self):
+        if sys.platform != 'win32':
+            raise RuntimeError('Nhúng SAP GUI yêu cầu Windows.')
+        import ctypes
+        from ctypes import wintypes
+        self.ctypes = ctypes
+        self.user = ctypes.WinDLL('user32', use_last_error=True)
+        self.rect_type = wintypes.RECT
+        specs = {
+            'IsWindow': ([wintypes.HWND], wintypes.BOOL),
+            'GetParent': ([wintypes.HWND], wintypes.HWND),
+            'SetParent': ([wintypes.HWND, wintypes.HWND], wintypes.HWND),
+            'GetWindowRect': ([wintypes.HWND, ctypes.POINTER(wintypes.RECT)], wintypes.BOOL),
+            'GetClientRect': ([wintypes.HWND, ctypes.POINTER(wintypes.RECT)], wintypes.BOOL),
+            'MoveWindow': ([wintypes.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.BOOL], wintypes.BOOL),
+            'SetWindowPos': ([wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.UINT], wintypes.BOOL),
+            'ShowWindow': ([wintypes.HWND, ctypes.c_int], wintypes.BOOL),
+        }
+        for name, (args, result) in specs.items():
+            function = getattr(self.user, name)
+            function.argtypes, function.restype = args, result
+        getter = 'GetWindowLongPtrW' if ctypes.sizeof(ctypes.c_void_p) == 8 else 'GetWindowLongW'
+        setter = 'SetWindowLongPtrW' if ctypes.sizeof(ctypes.c_void_p) == 8 else 'SetWindowLongW'
+        self.get_long, self.set_long = getattr(self.user, getter), getattr(self.user, setter)
+        self.get_long.argtypes = [wintypes.HWND, ctypes.c_int]
+        self.get_long.restype = ctypes.c_ssize_t
+        self.set_long.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
+        self.set_long.restype = ctypes.c_ssize_t
+
+    def valid(self, handle):
+        return bool(self.user.IsWindow(handle))
+
+    def set_value(self, handle, index, value):
+        self.ctypes.set_last_error(0)
+        old = self.set_long(handle, index, value)
+        if old == 0 and self.ctypes.get_last_error():
+            raise self.ctypes.WinError(self.ctypes.get_last_error())
+
+    def parent(self, handle, parent):
+        self.ctypes.set_last_error(0)
+        previous = self.user.SetParent(handle, parent)
+        if not previous and self.ctypes.get_last_error():
+            raise self.ctypes.WinError(self.ctypes.get_last_error())
+
+    def capture(self, handle):
+        if not self.valid(handle):
+            raise RuntimeError('Cửa sổ SAP không còn tồn tại.')
+        rectangle = self.rect_type()
+        if not self.user.GetWindowRect(handle, self.ctypes.byref(rectangle)):
+            raise self.ctypes.WinError()
+        style = self.get_long(handle, -16) & 0xFFFFFFFF
+        return dict(handle=handle, style=style,
+            parent=self.user.GetParent(handle) if style & 0x40000000 else 0,
+            owner=self.get_long(handle, -8), x=rectangle.left, y=rectangle.top,
+            width=rectangle.right-rectangle.left, height=rectangle.bottom-rectangle.top)
+
+    def embed(self, saved, host):
+        handle = saved['handle']
+        style = (saved['style'] | 0x40000000) & ~(0x80000000 | 0x00C00000 | 0x00040000 | 0x01000000 | 0x20000000)
+        self.set_value(handle, -16, style)
+        try:
+            self.parent(handle, host)
+            self.user.ShowWindow(handle, 9)
+            self.resize(handle, host)
+        except Exception:
+            self.restore(saved)
+            raise
+
+    def resize(self, handle, host):
+        if not self.valid(handle):
+            return
+        rectangle = self.rect_type()
+        if self.user.GetClientRect(host, self.ctypes.byref(rectangle)):
+            self.user.MoveWindow(handle, 0, 0, max(1, rectangle.right), max(1, rectangle.bottom), True)
+
+    def restore(self, saved):
+        handle = saved['handle']
+        if not self.valid(handle):
+            return
+        self.parent(handle, saved['parent'])
+        self.set_value(handle, -16, saved['style'])
+        if not saved['style'] & 0x40000000:
+            self.set_value(handle, -8, saved['owner'])
+        self.user.SetWindowPos(handle, 0, saved['x'], saved['y'], saved['width'], saved['height'], 0x0034)
+        self.user.ShowWindow(handle, 3 if saved['style'] & 0x01000000 else 9)
+
+
+class SapHost(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.native = None
+        self.saved = None
+        self.setMinimumHeight(250)
+        self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow)
+        layout = QVBoxLayout(self)
+        self.placeholder = QLabel('SAP GUI sẽ hiển thị tại đây sau khi mở PRD800.\n'
+            'Bạn nhập tài khoản và mật khẩu trực tiếp trên SAP.')
+        self.placeholder.setWordWrap(True)
+        self.placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.placeholder)
+
+    def attach(self, handle):
+        if self.saved and self.saved['handle'] == handle:
+            self.resize_native()
+            return
+        self.detach()
+        if self.native is None:
+            self.native = Win32SapWindow()
+        saved = self.native.capture(handle)
+        self.saved = saved
+        try:
+            self.native.embed(saved, int(self.winId()))
+        except Exception:
+            # Retain the original window snapshot if restoring fails, so that
+            # closing the app cannot silently destroy a still-parented SAP window.
+            self.detach()
+            raise
+        self.placeholder.hide()
+
+    def detach(self):
+        if self.saved is not None:
+            self.native.restore(self.saved)
+            self.saved = None
+        self.placeholder.show()
+
+    def resize_native(self):
+        if self.saved:
+            self.native.resize(self.saved['handle'], int(self.winId()))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.resize_native()
+
+
 class JobModel(QAbstractTableModel):
     columns = [('Mã job', 'id'), ('Tiêu đề', 'name')]
 
@@ -298,6 +790,8 @@ class Window(QMainWindow):
         self.rendering = False
         self.page_ready = False
         self.current_job = None
+        self.sap_request = None
+        self.sap_controller = SapController(self)
         self.current_index = 0
         self.sessions = {wid: {'jobs': None, 'state': 'active', 'query': '',
             'selected': None, 'expanded': True, 'updated': '',
@@ -317,6 +811,7 @@ class Window(QMainWindow):
         settings.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         menu = QMenu(settings)
         menu.addAction('Chọn logo Boston Pharma…', self.choose_brand_logo)
+        menu.addAction('Cấu hình SAP GUI…', self.configure_sap)
         settings.setMenu(menu)
         row = QHBoxLayout()
         layout.addLayout(row)
@@ -430,7 +925,7 @@ class Window(QMainWindow):
         self.sap_find = QPushButton('Tìm nhiệm vụ SAP →')
         self.sap_find.setObjectName('sapSearch')
         self.sap_find.setEnabled(False)
-        self.sap_find.setToolTip('Nhận PO từ job Base. Chưa kết nối để tìm trên SAP.')
+        self.sap_find.setToolTip('Mở ME29N và PO từ job Base. Không tự Release hoặc Save.')
         middle.addStretch()
         middle.addWidget(self.sap_find)
         middle.addStretch()
@@ -440,6 +935,24 @@ class Window(QMainWindow):
         right = QVBoxLayout(self.right)
         self.split.addWidget(self.right)
         right.addWidget(QLabel('SAP — Nhiệm vụ tương ứng'))
+        sap_buttons = QHBoxLayout()
+        right.addLayout(sap_buttons)
+        self.sap_open = QPushButton('Mở SAP PRD800')
+        self.sap_open.clicked.connect(self.sap_controller.connect_sap)
+        sap_buttons.addWidget(self.sap_open)
+        self.sap_detach = QPushButton('Tách cửa sổ SAP')
+        self.sap_detach.clicked.connect(self.detach_sap)
+        sap_buttons.addWidget(self.sap_detach)
+        self.sap_reattach = QPushButton('Gắn lại SAP')
+        self.sap_reattach.clicked.connect(self.reattach_sap)
+        sap_buttons.addWidget(self.sap_reattach)
+        self.sap_cancel = QPushButton('Hủy tìm PO')
+        self.sap_cancel.clicked.connect(self.sap_controller.cancel_navigation)
+        sap_buttons.addWidget(self.sap_cancel)
+        self.sap_connection_label = QLabel('SAP chưa kết nối. Dùng profile PRD800 đã có trong SAP Logon.')
+        self.sap_connection_label.setWordWrap(True)
+        self.sap_connection_label.setTextFormat(Qt.TextFormat.PlainText)
+        right.addWidget(self.sap_connection_label)
         self.sap_po = QLineEdit()
         self.sap_po.setReadOnly(True)
         self.sap_po.setPlaceholderText('PO nhận từ nhiệm vụ Base')
@@ -448,7 +961,14 @@ class Window(QMainWindow):
         self.sap_info.setWordWrap(True)
         self.sap_info.setTextFormat(Qt.TextFormat.PlainText)
         right.addWidget(self.sap_info)
-        right.addStretch()
+        self.sap_host = SapHost()
+        right.addWidget(self.sap_host, 1)
+        self.sap_controller.status_changed.connect(self.sap_connection_label.setText)
+        self.sap_controller.window_ready.connect(self.attach_sap)
+        self.sap_controller.navigation_changed.connect(self.sync_sap_button)
+        self.sap_controller.navigation_changed.connect(self.update_sap_buttons)
+        self.sap_controller.navigation_finished.connect(self.sap_navigation_finished)
+        self.update_sap_buttons()
         self.tabs.currentChanged.connect(self.change_tab)
         self.states.currentIndexChanged.connect(self.filters_changed)
         self.search.textChanged.connect(self.filters_changed)
@@ -774,13 +1294,70 @@ class Window(QMainWindow):
     def sync_sap_button(self):
         parsed = urlparse(self.browser.url().toString())
         match = re.fullmatch(r'/job/(\d+)/?', parsed.path)
-        enabled = bool(self.page_ready and self.current_job and parsed.hostname == 'workflow.base.vn'
+        enabled = bool(not self.sap_controller.navigation_active and self.page_ready and self.current_job and parsed.hostname == 'workflow.base.vn'
                        and match and match.group(1) == self.current_job['id'])
         self.sap_find.setEnabled(enabled)
 
+    def configure_sap(self):
+        if self.sap_controller.mode not in ('disconnected',) or self.sap_controller.navigation_active:
+            QMessageBox.information(self, 'SAP GUI', 'Kết nối SAP đang hoạt động. Đóng và mở lại app để đổi môi trường.')
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle('Cấu hình SAP GUI')
+        dialog.resize(650, 190)
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel('Đường dẫn SAP Logon:'))
+        path = QLineEdit(self.sap_controller.path)
+        layout.addWidget(path)
+        layout.addWidget(QLabel('Tên kết nối đã cấu hình trong SAP Logon (không nhập router/password):'))
+        entry = QLineEdit(self.sap_controller.entry)
+        layout.addWidget(entry)
+        save = QPushButton('Áp dụng')
+        save.clicked.connect(dialog.accept)
+        layout.addWidget(save)
+        if dialog.exec() == QDialog.DialogCode.Accepted and path.text().strip() and entry.text().strip():
+            self.sap_controller.path = path.text().strip()
+            self.sap_controller.entry = entry.text().strip()
+            self.sap_open.setText('Mở SAP ' + self.sap_controller.entry)
+        dialog.deleteLater()
+
+    def attach_sap(self, handle):
+        try:
+            self.sap_host.attach(handle)
+        except Exception:
+            self.sap_connection_label.setText('SAP đã mở nhưng chưa nhúng được cửa sổ. '
+                'Có thể dùng SAP bên ngoài và thử Gắn lại SAP; kiểm tra quyền chạy và DPI của hai ứng dụng.')
+
+    def detach_sap(self):
+        try:
+            self.sap_host.detach()
+        except Exception:
+            self.sap_connection_label.setText('Chưa tách được cửa sổ SAP. Giữ app mở và thử lại.')
+
+    def reattach_sap(self):
+        try:
+            self.sap_controller.show_window()
+        except Exception:
+            self.sap_connection_label.setText('Chưa tìm được cửa sổ SAP. Kiểm tra SAP Logon và phiên đang mở.')
+
+    def update_sap_buttons(self):
+        self.sap_cancel.setEnabled(self.sap_controller.navigation_active)
+
     def reset_sap(self):
+        self.sap_request = None
+        self.sap_controller.cancel_navigation()
         self.sap_po.clear()
-        self.sap_info.setText('Chưa kết nối SAP. Chưa thực hiện tìm nhiệm vụ tương ứng.')
+        self.sap_info.setText('Chọn job Base rồi bấm Tìm nhiệm vụ SAP. '
+            'Chứng từ cũ trên SAP không tự thay đổi khi chuyển job Base.')
+
+    def sap_navigation_finished(self, request_id, po, result, message):
+        request = self.sap_request
+        if request is None or request['id'] != request_id:
+            return
+        self.sap_request = None
+        if not self.current_job or self.current_job['id'] != request['job']:
+            return
+        self.sap_info.setText(f"PO {po} — {request['workflow']}, job {request['job']}.\n" + message)
 
     def find_sap(self):
         if not self.sap_find.isEnabled() or not self.current_job:
@@ -812,9 +1389,11 @@ class Window(QMainWindow):
         if not self.current_job or self.current_job['id'] != source_id or not self.sap_find.isEnabled():
             return
         self.sap_po.setText(po)
-        self.sap_info.setText(f'Yêu cầu tìm nhiệm vụ SAP cho PO {po}.\n'
+        self.sap_info.setText(f'Đang mở ME29N cho PO {po}.\n'
             f'Nguồn: {self.workflow_name()}, job {source_id}.\n'
-            'Chưa kết nối SAP nên chưa thực hiện tìm kiếm.')
+            'Nếu SAP chưa đăng nhập, nhập tài khoản trực tiếp trên SAP.')
+        request_id = self.sap_controller.request_po(po)
+        self.sap_request = {'id': request_id, 'job': source_id, 'workflow': self.workflow_name()}
 
     def closeEvent(self, event):
         if self.worker is not None:
@@ -823,6 +1402,13 @@ class Window(QMainWindow):
             self.info.setText('Đang dừng yêu cầu API trước khi đóng…')
             event.ignore()
         else:
+            try:
+                self.sap_host.detach()
+            except Exception:
+                self.sap_connection_label.setText('Không tách được SAP. Hãy giữ app mở và thử Tách cửa sổ SAP trước khi đóng.')
+                event.ignore()
+                return
+            self.sap_controller.shutdown()
             self.api_token = ''
             event.accept()
 

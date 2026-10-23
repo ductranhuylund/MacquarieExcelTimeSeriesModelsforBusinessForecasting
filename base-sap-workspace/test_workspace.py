@@ -50,6 +50,43 @@ class FakeBrowser(QWidget):
 
 
 
+
+class FakeSapController(QObject):
+    status_changed=Signal(str)
+    window_ready=Signal(object)
+    navigation_changed=Signal()
+    navigation_finished=Signal(int,str,str,str)
+    def __init__(self,parent=None):
+        super().__init__(parent)
+        self.pending=None
+        self.requests=[]
+        self.sequence=0
+        self.mode='disconnected'
+        self.path=appmod.SAP_LOGON_PATH
+        self.entry=appmod.SAP_CONNECTION
+    @property
+    def navigation_active(self):return self.pending is not None
+    def request_po(self,po):
+        self.sequence+=1
+        self.pending=(self.sequence,po)
+        self.requests.append(self.pending)
+        self.navigation_changed.emit()
+        return self.sequence
+    def cancel_navigation(self):
+        if self.pending:
+            rid,po=self.pending;self.pending=None
+            self.navigation_changed.emit()
+            self.navigation_finished.emit(rid,po,'cancelled','Đã hủy')
+    def finish(self,result='verified',message='Đã mở đúng PO'):
+        if self.pending:
+            rid,po=self.pending;self.pending=None
+            self.navigation_changed.emit()
+            self.navigation_finished.emit(rid,po,result,message)
+    def connect_sap(self):self.status_changed.emit('SAP thử nghiệm')
+    def show_window(self):pass
+    def shutdown(self):self.pending=None
+
+
 class ControlledLoader(QObject):
     loaded=Signal(list)
     failed=Signal(str)
@@ -90,6 +127,7 @@ class GuiTests(unittest.TestCase):
         self.patches = [patch.object(appmod, 'QWebEngineProfile', FakeProfile),
                         patch.object(appmod, 'QWebEnginePage', FakePage),
                         patch.object(appmod, 'BrowserPage', FakePage),
+                        patch.object(appmod, 'SapController', FakeSapController),
                         patch.object(appmod, 'QWebEngineView', FakeBrowser)]
         for p in self.patches: p.start()
         self.window = appmod.Window()
@@ -166,13 +204,15 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(w.current_job['state'],'paused_by_base')
         self.assertEqual(w.model.columnCount(),2)
 
-    def test_sap_request_no_false_search_and_cleared_on_navigation(self):
+    def test_sap_po_request_has_base_source_and_cancels_on_navigation(self):
         self.populate()
         w=self.window
         self.assertTrue(w.sap_find.isEnabled())
         w.find_sap()
         self.assertEqual(w.sap_po.text(),'4500000001')
-        self.assertIn('chưa thực hiện tìm kiếm',w.sap_info.text())
+        self.assertIn('Đang mở ME29N',w.sap_info.text())
+        self.assertEqual(w.sap_controller.requests,[(1,'4500000001')])
+        self.assertFalse(w.sap_find.isEnabled())
         self.assertIn('job 3',w.sap_info.text())
         w.move(1)
         self.assertEqual(w.sap_po.text(),'')

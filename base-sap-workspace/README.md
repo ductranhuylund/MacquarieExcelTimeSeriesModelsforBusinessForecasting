@@ -11,7 +11,7 @@ python -m pip install -r requirements.txt
 python base_sap_workspace.py
 ```
 
-Hoặc sau khi cài thư viện, mở `run_windows.bat`. Nếu chỉ muốn dùng một file Python, cài `PySide6 requests` rồi chạy `base_sap_workspace.py`.
+Hoặc sau khi cài thư viện, mở `run_windows.bat`. Nếu chỉ muốn dùng một file Python, cài `PySide6 requests pywin32` rồi chạy `base_sap_workspace.py`.
 
 ## Cách sử dụng
 
@@ -20,10 +20,28 @@ Hoặc sau khi cài thư viện, mở `run_windows.bat`. Nếu chỉ muốn dùn
 3. Chọn **Nguyên liệu — F011**, **Bao bì — F012**, hoặc **Khác — F013**. Khi đã có token, tab chưa có dữ liệu sẽ tự tải lần đầu; tab đã tải dùng lại danh sách riêng. Các tab luôn bấm được, kể cả lúc API đang tải. Nếu chuyển sang tab chưa tải trong lúc đọc workflow khác, app yêu cầu dừng lượt cũ sau yêu cầu HTTP hiện tại rồi tải tab được chọn cuối cùng. Có thể phải chờ yêu cầu HTTP hiện tại kết thúc; app không gửi đồng thời hàng loạt lượt tải. **Làm mới danh sách** dùng để đọc lại tab đã có dữ liệu.
 4. Ba tab workflow được đặt trong khung Base và căn trái. Lọc theo `state` gốc của Base, tìm theo mã job, PO hoặc tiêu đề; ô tìm kiếm thu gọn để **Làm mới danh sách** và **Danh sách nhiệm vụ** nằm cùng hàng. Bảng chỉ có **Mã job** và **Tiêu đề**, hiển thị trọn 3 dòng rồi cuộn để xem tiếp. Tất cả job vẫn được giữ, không giới hạn danh sách còn 3 job. Chọn một dòng hoặc dùng **Trước / Tiếp theo**; có thể thu gọn bảng.
 5. Bộ lọc, từ tìm kiếm, nhiệm vụ đã chọn và trạng thái mở/thu gọn danh sách được nhớ riêng theo workflow trong phiên chạy. Dữ liệu được giữ trong RAM riêng theo cặp workflow và trạng thái; đổi qua lại trạng thái đã tải không gọi lại API. Không lọc theo ngày.
-6. **Tìm nhiệm vụ SAP →** nhận PO từ tiêu đề job đang mở; nếu có nhiều PO, app cho chọn, nếu không nhận diện được thì cho nhập. **Chưa có kết nối SAP: hiện nút chỉ hiển thị yêu cầu tìm kiếm và nguồn PO, không tìm hoặc trả kết quả SAP.**
+6. **Tìm nhiệm vụ SAP →** nhận PO từ tiêu đề job đang mở; nếu có nhiều PO, app cho chọn, nếu không nhận diện được thì cho nhập. App mở ME29N trong SAP GUI, chọn PO và kiểm tra số PO đang hiển thị. Người dùng tự duyệt trên từng hệ thống; app không bấm Release hoặc Save.
 7. Có thể kéo thanh chia khung hoặc chọn **Mở rộng Base / Chia đôi / Mở rộng SAP**. **Xem trang Base đầy đủ** thay đổi bố cục hiển thị, không tải lại trang.
 
 **PR đang tạm khóa**, chờ xác định workflow tương ứng. App không gộp trạng thái Base/SAP hoặc tạo trạng thái nghiệp vụ mới.
+
+## SAP GUI trên Windows
+
+Cài thêm `pywin32` nếu bạn dùng lại môi trường Python cũ:
+
+```bat
+python -m pip install pywin32
+```
+
+- SAP Logon cần có kết nối **PRD800** cấu hình sẵn. App dùng profile đó; không chứa router/password trong mã nguồn.
+- Đường dẫn mặc định: `C:\Program Files (x86)\SAP\FrontEnd\SAPgui\saplogon.exe`. Có thể đổi đường dẫn và tên kết nối trong **Cài đặt → Cấu hình SAP GUI…** trước khi kết nối.
+- Cần SAP GUI Scripting được cho phép ở máy khách (SAP GUI Options → Accessibility & Scripting → Scripting) và máy chủ. Nếu máy chủ tắt Scripting, liên hệ quản trị SAP; app không tự đổi cấu hình bảo mật.
+- Bấm **Mở SAP PRD800**, nhập tài khoản/mật khẩu trực tiếp trên màn hình SAP được nhúng bên phải. App không đọc hoặc lưu mật khẩu.
+- Chọn job Base, bấm **Tìm nhiệm vụ SAP →**. App mở ME29N, nhận diện nút Other Purchase Order, điền PO vào hộp chọn chứng từ rồi xác minh số PO. Hộp thoại lạ được giữ nguyên để người dùng xử lý. Nếu không nhận diện được nút, mở hộp chọn PO thủ công rồi bấm tìm lại.
+- Đối chiếu và duyệt thủ công trên từng hệ thống. Sau đó bấm **Tiếp theo →** ở Base, rồi **Tìm nhiệm vụ SAP →** lần nữa. Khi đổi job Base, chứng từ SAP cũ vẫn còn; thông báo nhắc rõ chưa có đối chiếu mới. App không suy đoán cả hai bên đã duyệt thành công.
+- **Hủy tìm PO** chỉ dừng điều hướng, không hoàn tác thao tác đã gửi. **Tách cửa sổ SAP / Gắn lại SAP** chuyển giữa cửa sổ ngoài và khung phải. Đóng app sẽ tách SAP ra, không tự đăng xuất SAP.
+
+Phần COM/nhúng cửa sổ được kiểm thử bằng mô phỏng trên Linux, chưa được chạy trực tiếp với SAP GUI 760 trên Windows. Cần kiểm tra trên máy thực tế; nếu nhúng không thành công, có thể dùng cửa sổ SAP bên ngoài. Kết nối Base và SAP độc lập.
 
 ## Logo và màu Boston Pharma
 
@@ -64,11 +82,12 @@ Profile trình duyệt nằm tại `%LOCALAPPDATA%\BaseF011Viewer`. Không chia 
 ```bat
 python test_workspace.py
 python test_boston_brand.py
+python test_sap.py
 ```
 
 Trên Linux không có màn hình, đặt `QT_QPA_PLATFORM=offscreen` khi chạy kiểm thử. Bộ kiểm thử dùng Qt widgets/model thực tế, mô phỏng API và trình duyệt để không gửi dữ liệu hoặc thao tác lên hệ thống thật.
 
-Đã đạt 42 kiểm thử giao diện/logic và 3 kiểm thử nhận diện thương hiệu trên Linux. Có thêm kiểm thử tham số `status` dạng chữ, phân trang theo tổng đã lọc, kết quả rỗng, từ chối bộ lọc bị máy chủ bỏ qua, bộ nhớ tạm tách trạng thái và chuyển trạng thái khi đang tải. Có kiểm thử chuyển F011/F012/F013 trong lúc tải, chuyển nhanh nhiều tab, giữ dữ liệu đúng workflow, bỏ qua tiến độ từ lượt cũ và đóng app khi có lượt tải chờ. Ba kiểm thử bố cục mới cũng được chạy lại ở mức phóng đại 150% để kiểm tra hàng nút, tab căn trái và 3 dòng hiển thị. Đã kiểm tra riêng bố cục nhúng bằng Chromium ngoại tuyến. Giao diện/đăng nhập Base trên Windows và SAP cần kiểm tra trong môi trường sử dụng thực tế. Không có token, phiên đăng nhập hoặc dữ liệu xuất từ Base/SAP trong thư mục ứng dụng này.
+Đã đạt 42 kiểm thử giao diện/logic, 3 kiểm thử nhận diện thương hiệu và 12 kiểm thử SAP mô phỏng trên Linux. Các kiểm thử SAP kiểm tra điều hướng ME29N/PO, không thao tác nút Release, dừng trước hộp thoại lạ, chờ đăng nhập, timeout và khôi phục cửa sổ khi tách. Có thêm kiểm thử tham số `status` dạng chữ, phân trang theo tổng đã lọc, kết quả rỗng, từ chối bộ lọc bị máy chủ bỏ qua, bộ nhớ tạm tách trạng thái và chuyển trạng thái khi đang tải. Có kiểm thử chuyển F011/F012/F013 trong lúc tải, chuyển nhanh nhiều tab, giữ dữ liệu đúng workflow, bỏ qua tiến độ từ lượt cũ và đóng app khi có lượt tải chờ. Ba kiểm thử bố cục mới cũng được chạy lại ở mức phóng đại 150% để kiểm tra hàng nút, tab căn trái và 3 dòng hiển thị. Đã kiểm tra riêng bố cục nhúng bằng Chromium ngoại tuyến. Giao diện/đăng nhập Base trên Windows và SAP cần kiểm tra trong môi trường sử dụng thực tế. Không có token, phiên đăng nhập hoặc dữ liệu xuất từ Base/SAP trong thư mục ứng dụng này.
 
 ## Minh họa bố cục
 
