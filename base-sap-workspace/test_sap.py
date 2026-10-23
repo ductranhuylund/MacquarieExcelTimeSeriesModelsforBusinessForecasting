@@ -94,6 +94,37 @@ class SapTests(unittest.TestCase):
         c.poll(); self.assertEqual(s.actions, []); self.assertIsNone(c.navigator)
         s.Info.User = 'TEST'; c.poll()
         self.assertEqual(s.actions, [('transaction', 'ME29N')]); c.shutdown()
+    def test_pending_po_survives_login_transition_and_finishes(self):
+        s = Session()
+        class LoginInfo:
+            @property
+            def User(self): raise RuntimeError('login transition')
+        ready_info = s.Info; s.Info = LoginInfo()
+        c = m.SapController(); c.session = s; c.mode = 'login'; c.pending = (7, '4100000001')
+        results = []; c.navigation_finished.connect(lambda *args: results.append(args))
+        c.poll(); self.assertEqual(c.pending, (7, '4100000001'))
+        self.assertEqual(s.actions, [])
+        s.Info = ready_info
+        for _ in range(10): c.poll()
+        self.assertIsNone(c.pending)
+        self.assertEqual(results[0][:3], (7, '4100000001', 'verified'))
+        c.shutdown()
+    def test_reentrant_poll_does_not_open_second_connection(self):
+        c = m.SapController(); c.mode = 'engine'; c.deadline = 1e20
+        calls = []
+        connection = NS(DisabledByServer=False, Children=Collection([]))
+        def open_connection(entry, synchronous):
+            calls.append(entry); c.poll(); return connection
+        c.engine = NS(Children=Collection([]), OpenConnection=open_connection)
+        c.poll(); self.assertEqual(calls, ['PRD800']); self.assertEqual(c.mode, 'connection')
+        c.shutdown()
+    def test_nested_me29n_document_button(self):
+        s = Session(); s.Info.Transaction = 'ME29N'
+        del s.controls['wnd[0]/tbar[1]']
+        s.controls['wnd[0]/usr'] = NS(Type='GuiUserArea', Children=Collection([
+            NS(Type='GuiSimpleContainer', Children=Collection([s.button]))]))
+        self.assertEqual(self.run_navigation(s)[0], 'verified')
+
     def test_host_restores_external_window(self):
         events = []
         host = m.SapHost()

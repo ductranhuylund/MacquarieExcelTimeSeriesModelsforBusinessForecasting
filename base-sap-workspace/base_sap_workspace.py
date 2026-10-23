@@ -280,14 +280,22 @@ class SapNavigator:
         return values[0] if len(values) == 1 else None
 
     def other_document_button(self, session):
-        toolbar = sap_find(session, 'wnd[0]/tbar[1]')
-        if toolbar is None:
-            return None
+        roots = [sap_find(session, key) for key in ('wnd[0]/tbar[1]', 'wnd[0]/usr')]
+        controls = []
+        pending = [root for root in roots if root is not None]
+        # ME29N places its document toolbar inside nested user containers on some themes.
+        while pending and len(controls) < 1500:
+            node = pending.pop(0)
+            controls.append(node)
+            try:
+                pending.extend(sap_children(node))
+            except Exception:
+                pass
         allowed = ('other purchase order', 'other document', 'select document',
                    'other po', 'purchase order selection', 'chung tu khac',
                    'don hang khac', 'chon chung tu')
-        for button in sap_children(toolbar):
-            if str(button.Type) != 'GuiButton':
+        for button in controls:
+            if str(getattr(button, 'Type', '')) != 'GuiButton':
                 continue
             label = sap_text(str(getattr(button, 'Tooltip', '')) + ' ' + str(getattr(button, 'Text', '')))
             if any(word in label for word in ('release', 'approve', 'save', 'duyet')):
@@ -403,6 +411,8 @@ class SapController(QObject):
         self.com = None
         self.opened = False
         self.initial_connections = set()
+        self.polling = False
+        self.login_probe_since = None
         self.timer = QTimer(self)
         self.timer.setInterval(250)
         self.timer.timeout.connect(self.poll)
@@ -499,6 +509,17 @@ class SapController(QObject):
                 self.window_ready.emit(int(handle, 16) if handle.lower().startswith('0x') else int(handle))
 
     def poll(self):
+        # COM calls may pump Windows messages while a SAP confirmation is open.
+        # Do not let a nested Qt timer open another connection or navigate twice.
+        if self.polling:
+            return
+        self.polling = True
+        try:
+            self.poll_once()
+        finally:
+            self.polling = False
+
+    def poll_once(self):
         try:
             now = __import__('time').monotonic()
             if self.mode == 'engine':
@@ -511,8 +532,8 @@ class SapController(QObject):
                         return
                 if not self.opened:
                     self.initial_connections = {str(c.Id) for c in sap_children(self.engine)}
-                    self.connection = self.engine.OpenConnection(self.entry, False)
                     self.opened = True
+                    self.connection = self.engine.OpenConnection(self.entry, False)
                 self.mode = 'connection'
                 self.deadline = now + 60
             if self.mode == 'connection':
@@ -549,7 +570,20 @@ class SapController(QObject):
                 if handle != self.handle:
                     self.handle = handle
                     self.window_ready.emit(handle)
-            if not str(self.session.Info.User).strip():
+            try:
+                user_ready = bool(str(self.session.Info.User).strip())
+                transaction = str(self.session.Info.Transaction).strip()
+            except Exception:
+                if self.mode != 'login':
+                    raise
+                if self.login_probe_since is None:
+                    self.login_probe_since = now
+                    self.status_changed.emit('Đang chờ SAP hoàn tất đăng nhập; yêu cầu PO vẫn được giữ.')
+                if now - self.login_probe_since > 120:
+                    self.fail('Chưa đọc được phiên sau đăng nhập. Kiểm tra hộp thoại SAP rồi kết nối lại.')
+                return
+            self.login_probe_since = None
+            if not user_ready or transaction.upper() in ('', 'S000', 'SAPMSYST'):
                 return
             if self.mode != 'ready':
                 self.mode = 'ready'
@@ -563,10 +597,12 @@ class SapController(QObject):
                     self.finish_navigation(*result)
         except SapNavigationError as exc:
             self.finish_navigation('error', str(exc))
-        except Exception:
-            # COM errors may contain connection strings: never print raw errors.
-            self.opened = False
-            self.fail('Không điều khiển được SAP. Kiểm tra hộp thoại SAP, phiên đăng nhập và quyền GUI Scripting.')
+        except Exception as exc:
+            # Report phase/HRESULT only; raw COM messages may contain connection secrets.
+            phase = self.navigator.phase if self.navigator is not None else self.mode
+            code = getattr(exc, 'hresult', None)
+            detail = f' [{phase}' + (f', HRESULT {code}' if isinstance(code, int) else '') + ']'
+            self.fail('Không điều khiển được SAP' + detail + '. Kiểm tra hộp thoại SAP và quyền GUI Scripting.')
 
     def shutdown(self):
         self.timer.stop()
