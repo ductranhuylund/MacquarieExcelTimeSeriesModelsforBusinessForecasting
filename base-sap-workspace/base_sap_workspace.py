@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLineEdit, QPushButton, QLabel, QComboBox, QTabBar, QSplitter,
     QInputDialog, QDialog, QTableView, QAbstractItemView, QHeaderView,
-    QToolButton, QMenu, QFileDialog, QMessageBox,
+    QToolButton, QMenu, QFileDialog, QMessageBox, QSizePolicy,
 )
 from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage
 from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -58,9 +58,6 @@ BRAND_STYLE = """
 QWidget { font-family: "Segoe UI", Arial; font-size: 12px; color: #193C37; }
 QMainWindow, QDialog { background-color: #F3F8F6; }
 QLabel { background: transparent; }
-QLabel#brandLogo { background: white; color: #168D80; border: 1px solid #D9EAE5;
-    border-radius: 8px; font-family: Georgia; font-size: 16px; font-weight: 600; }
-QLabel#brandTitle { color: #086B61; font-size: 18px; font-weight: 600; }
 QLabel#connectionStatus { color: #50756D; font-size: 11px; }
 QLineEdit, QComboBox { background: white; border: 1px solid #BCD8D0;
     border-radius: 5px; padding: 6px; selection-background-color: #0C756A; }
@@ -185,8 +182,7 @@ class Loader(QThread):
 
 
 class JobModel(QAbstractTableModel):
-    columns = [('Mã job', 'id'), ('Tiêu đề', 'name'),
-               ('Trạng thái Base', 'state'), ('Giai đoạn', 'stage')]
+    columns = [('Mã job', 'id'), ('Tiêu đề', 'name')]
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -206,13 +202,22 @@ class JobModel(QAbstractTableModel):
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if index.isValid() and role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ToolTipRole):
             value = self.rows[index.row()][self.columns[index.column()][1]]
-            return state_label(value) if index.column() == 2 else value
+            return value
         return None
 
     def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
         if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
             return self.columns[section][0]
         return None
+
+
+class JobTable(QTableView):
+    def showEvent(self, event):
+        super().showEvent(event)
+        # Measure after Qt has applied fonts, stylesheet and display scaling.
+        header_height = self.horizontalHeader().sizeHint().height()
+        row_height = self.verticalHeader().defaultSectionSize()
+        self.setFixedHeight(header_height + 3 * row_height + 2 * self.frameWidth())
 
 
 class ConnectionDialog(QDialog):
@@ -262,30 +267,16 @@ class Window(QMainWindow):
         root = QWidget()
         self.setCentralWidget(root)
         layout = QVBoxLayout(root)
-        top = QHBoxLayout()
-        layout.addLayout(top)
-        self.brand_logo = QLabel('BOSTON\nPHARMA')
-        self.brand_logo.setObjectName('brandLogo')
-        self.brand_logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.brand_logo.setFixedSize(160, 94)
-        top.addWidget(self.brand_logo)
-        title = QLabel('ĐỐI CHIẾU PO / PR\nBASE & SAP')
-        title.setObjectName('brandTitle')
-        top.addWidget(title)
-        top.addStretch()
         self.api_status = QLabel('API Base: chưa kiểm tra')
         self.api_status.setObjectName('connectionStatus')
-        top.addWidget(self.api_status)
         self.connection = QPushButton('Kết nối')
         self.connection.clicked.connect(self.open_connections)
-        top.addWidget(self.connection)
         settings = QToolButton()
         settings.setText('Cài đặt')
         settings.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         menu = QMenu(settings)
         menu.addAction('Chọn logo Boston Pharma…', self.choose_brand_logo)
         settings.setMenu(menu)
-        top.addWidget(settings)
         row = QHBoxLayout()
         layout.addLayout(row)
         self.business = QTabBar()
@@ -296,15 +287,13 @@ class Window(QMainWindow):
         self.business.setTabToolTip(1, 'Chờ xác định workflow PR trên Base.')
         row.addWidget(self.business)
         row.addStretch()
+        row.addWidget(self.api_status)
+        row.addWidget(self.connection)
+        row.addWidget(settings)
         self.view_mode = QComboBox()
         self.view_mode.addItems(['Chia đôi', 'Mở rộng Base', 'Mở rộng SAP'])
         self.view_mode.currentIndexChanged.connect(self.change_layout)
         row.addWidget(self.view_mode)
-        self.tabs = QTabBar()
-        self.tabs.setExpanding(True)
-        for name, _ in WORKFLOWS:
-            self.tabs.addTab(name)
-        layout.addWidget(self.tabs)
         self.split = QSplitter(Qt.Orientation.Horizontal)
         self.split.setChildrenCollapsible(False)
         layout.addWidget(self.split, 1)
@@ -314,13 +303,26 @@ class Window(QMainWindow):
         self.left.setMinimumWidth(380)
         self.split.addWidget(self.left)
         left.addWidget(QLabel('BASE — Nhiệm vụ của workflow đang chọn'))
+        self.tabs = QTabBar()
+        self.tabs.setExpanding(False)
+        self.tabs.setUsesScrollButtons(True)
+        for name, _ in WORKFLOWS:
+            self.tabs.addTab(name)
+        tabs_row = QHBoxLayout()
+        tabs_row.addWidget(self.tabs)
+        tabs_row.addStretch()
+        left.addLayout(tabs_row)
         row = QHBoxLayout()
         left.addLayout(row)
         self.states = QComboBox()
         self.states.setToolTip('Giữ nguyên giá trị state của Base API.')
+        self.states.setMaximumWidth(190)
         row.addWidget(self.states)
         self.search = QLineEdit()
-        self.search.setPlaceholderText('Tìm mã job / PO / tiêu đề…')
+        self.search.setPlaceholderText('Tìm job / PO / tiêu đề…')
+        self.search.setMinimumWidth(90)
+        self.search.setMaximumWidth(220)
+        self.search.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         row.addWidget(self.search, 1)
         self.refresh = QPushButton('Làm mới danh sách')
         self.refresh.setObjectName('primary')
@@ -330,24 +332,24 @@ class Window(QMainWindow):
         self.list_toggle.setCheckable(True)
         self.list_toggle.setChecked(True)
         self.list_toggle.setArrowType(Qt.ArrowType.DownArrow)
-        left.addWidget(self.list_toggle)
+        row.addWidget(self.list_toggle)
+        row.addStretch()
         self.model = JobModel(self)
-        self.table = QTableView()
+        self.table = JobTable()
         self.table.setModel(self.model)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
         self.table.setWordWrap(False)
-        self.table.setMinimumHeight(120)
-        self.table.setMaximumHeight(220)
+        self.table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerItem)
+        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.table.verticalHeader().hide()
+        self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
         self.table.verticalHeader().setDefaultSectionSize(35)
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.table.setColumnWidth(0, 90)
-        self.table.setColumnWidth(2, 150)
-        self.table.setColumnWidth(3, 120)
         left.addWidget(self.table)
         self.count = QLabel()
         left.addWidget(self.count)
@@ -436,13 +438,8 @@ class Window(QMainWindow):
             if path.is_file():
                 pixmap = QPixmap(str(path))
                 if not pixmap.isNull():
-                    self.brand_logo.setPixmap(pixmap.scaled(
-                        148, 84, Qt.AspectRatioMode.KeepAspectRatio,
-                        Qt.TransformationMode.SmoothTransformation))
-                    self.brand_logo.setToolTip('Boston Pharma')
                     self.setWindowIcon(QIcon(pixmap))
                     return True
-        self.brand_logo.setToolTip('Chọn ảnh logo tại Cài đặt → Chọn logo Boston Pharma.')
         return False
 
     def choose_brand_logo(self):

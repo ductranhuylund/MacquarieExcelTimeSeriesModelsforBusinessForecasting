@@ -14,7 +14,8 @@ class BrandTests(test_workspace.GuiTests):
         w=self.window
         self.assertIn('Boston Pharma',w.windowTitle())
         self.assertIn('#168D80',w.styleSheet())
-        self.assertEqual(w.brand_logo.text(),'BOSTON\nPHARMA')
+        self.assertIsNone(w.findChild(brand.QLabel, 'brandLogo'))
+        self.assertIsNone(w.findChild(brand.QLabel, 'brandTitle'))
         self.assertEqual(w.refresh.objectName(),'primary')
         self.assertEqual(w.sap_find.objectName(),'sapSearch')
 
@@ -26,12 +27,11 @@ class BrandTests(test_workspace.GuiTests):
         with patch.object(brand.QFileDialog,'getOpenFileName',return_value=(str(source),'')):
             w.choose_brand_logo()
         self.assertEqual(w.brand_path().read_bytes(),source.read_bytes())
-        self.assertFalse(w.brand_logo.pixmap().isNull())
         self.assertFalse(w.windowIcon().isNull())
         # Original can disappear and app still retains the exact selected file.
         source.unlink()
         again=brand.Window()
-        self.assertFalse(again.brand_logo.pixmap().isNull())
+        self.assertFalse(again.windowIcon().isNull())
         again.close();again.deleteLater();self.qt.processEvents()
 
     def test_invalid_logo_preserves_existing_file(self):

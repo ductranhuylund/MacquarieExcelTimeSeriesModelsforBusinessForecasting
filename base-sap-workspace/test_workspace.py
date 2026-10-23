@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
 
-from PySide6.QtCore import QObject, QUrl, Signal, Qt
+from PySide6.QtCore import QObject, QUrl, Signal, Qt, QPoint
 from PySide6.QtWidgets import QApplication, QWidget
 import base_sap_workspace as appmod
 
@@ -133,7 +133,8 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(w.states.itemText(i),'paused_by_base')
         w.states.setCurrentIndex(i)
         self.assertEqual(w.model.rowCount(),1)
-        self.assertEqual(w.model.data(w.model.index(0,2)),'paused_by_base')
+        self.assertEqual(w.current_job['state'],'paused_by_base')
+        self.assertEqual(w.model.columnCount(),2)
 
     def test_sap_request_no_false_search_and_cleared_on_navigation(self):
         self.populate()
@@ -264,6 +265,41 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(w.api_token,'new-placeholder')
         self.assertTrue(all(s['jobs'] is None for s in w.sessions.values()))
         self.assertIsNone(w.current_job)
+
+    def test_workflow_tabs_belong_to_base_and_align_left(self):
+        w=self.window
+        self.assertTrue(w.left.isAncestorOf(w.tabs))
+        self.assertFalse(w.right.isAncestorOf(w.tabs))
+        self.assertFalse(w.tabs.expanding())
+        self.assertEqual(w.tabs.mapTo(w.left,QPoint(0,0)).x(),0)
+        self.assertLess(w.tabs.width(),w.left.width())
+
+    def test_list_toggle_and_refresh_share_compact_filter_row(self):
+        w=self.window
+        self.populate()
+        centres=[widget.mapTo(w.left,widget.rect().center()).y()
+                 for widget in (w.states,w.search,w.refresh,w.list_toggle)]
+        self.assertLessEqual(max(centres)-min(centres),1)
+        self.assertLessEqual(w.search.width(),220)
+        self.assertFalse(hasattr(w,'brand_logo'))
+        self.assertIsNone(w.findChild(appmod.QLabel,'brandTitle'))
+
+    def test_three_visible_job_rows_without_discarding_remaining_jobs(self):
+        self.populate(rows=[job(i) for i in range(8,0,-1)])
+        w=self.window
+        self.assertEqual(w.model.columnCount(),2)
+        self.assertEqual([x[0] for x in w.model.columns],['Mã job','Tiêu đề'])
+        self.assertEqual(w.model.rowCount(),8)
+        height=w.table.viewport().height()
+        row_height=w.table.verticalHeader().defaultSectionSize()
+        self.assertGreaterEqual(height,3*row_height)
+        self.assertLess(height,4*row_height)
+        self.assertEqual(w.table.rowAt(height-1),2)
+        w.move(4)
+        self.qt.processEvents()
+        self.assertEqual(w.current_job['id'],'4')
+        self.assertGreater(w.table.verticalScrollBar().value(),0)
+        self.assertLessEqual(w.table.visualRect(w.model.index(4,0)).bottom(),height)
 
     def test_table_handles_thousands(self):
         rows=[job(i,'active') for i in range(6000,0,-1)]
