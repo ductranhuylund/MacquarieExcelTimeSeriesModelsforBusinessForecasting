@@ -56,9 +56,10 @@ class ControlledLoader(QObject):
     progress=Signal(str)
     finished=Signal()
     created=[]
-    def __init__(self,token,workflow_id,parent):
+    def __init__(self,token,workflow_id,parent,state='*'):
         super().__init__(parent)
         self.workflow_id=workflow_id
+        self.request_state=state
         self.running=False
         self.cancelled=False
         self.created.append(self)
@@ -102,7 +103,9 @@ class GuiTests(unittest.TestCase):
         self.env.stop()
         self.temp.cleanup()
     def populate(self, wid=3991, rows=None):
-        self.window.sessions[wid]['jobs'] = rows if rows is not None else [job(3), job(2), job(1,'done')]
+        values = rows if rows is not None else [job(3), job(2), job(1,'done')]
+        self.window.sessions[wid]['batches']['*'] = {'jobs':values,'updated':''}
+        self.window.sessions[wid]['jobs'] = values
         self.window.restore_tab()
         self.qt.processEvents()
 
@@ -304,7 +307,7 @@ class GuiTests(unittest.TestCase):
             w.tabs.setCurrentIndex(1)
             self.assertEqual(w.current_index,1)
             self.assertTrue(first.cancelled)
-            self.assertEqual(w.pending_workflow,4156)
+            self.assertEqual(w.pending_request,(4156,'active'))
             first.finish()
             self.assertEqual(w.worker.workflow_id,4156)
             w.worker.finish([job(9)])
@@ -327,7 +330,7 @@ class GuiTests(unittest.TestCase):
             w.load_jobs();first=w.worker
             w.tabs.setCurrentIndex(1)
             w.tabs.setCurrentIndex(2)
-            self.assertEqual(w.pending_workflow,4157)
+            self.assertEqual(w.pending_request,(4157,'active'))
             first.finish()
             self.assertEqual(w.worker.workflow_id,4157)
             w.worker.finish([job(7)])
@@ -343,9 +346,9 @@ class GuiTests(unittest.TestCase):
         with patch.object(appmod,'Loader',ControlledLoader):
             w.load_jobs();first=w.worker
             w.tabs.setCurrentIndex(1)
-            self.assertEqual(w.pending_workflow,4156)
+            self.assertEqual(w.pending_request,(4156,'active'))
             w.tabs.setCurrentIndex(0)
-            self.assertIsNone(w.pending_workflow)
+            self.assertIsNone(w.pending_request)
             first.finish()
         self.assertEqual(len(ControlledLoader.created),1)
         self.assertEqual(w.current_job['id'],'3')
@@ -407,6 +410,102 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(len(ControlledLoader.created),1)
         self.assertIsNone(w.worker)
         self.assertFalse(w.isVisible())
+
+    def test_state_snapshots_are_loaded_on_demand_and_reused(self):
+        w=self.window
+        w.api_token='placeholder'
+        ControlledLoader.created=[]
+        with patch.object(appmod,'Loader',ControlledLoader):
+            w.load_jobs()
+            self.assertEqual(w.worker.request_state,'active')
+            w.worker.finish([job(3)])
+            self.assertEqual(w.model.rowCount(),1)
+            self.assertEqual(w.session()['loaded_state'],'active')
+            w.states.setCurrentIndex(w.states.findData('failed'))
+            self.assertEqual(w.worker.request_state,'failed')
+            self.assertEqual(w.model.rowCount(),0)
+            w.worker.finish([job(2,'failed')])
+            self.assertEqual(w.current_job['id'],'2')
+            w.states.setCurrentIndex(w.states.findData('active'))
+            self.assertIsNone(w.worker)
+            self.assertEqual(w.current_job['id'],'3')
+            self.assertNotIn('*',w.session()['batches'])
+            w.states.setCurrentIndex(w.states.findData('*'))
+            self.assertEqual(w.worker.request_state,'*')
+            w.worker.finish([job(3),job(2,'failed'),job(1,'done')])
+        self.assertEqual([t.request_state for t in ControlledLoader.created],['active','failed','*'])
+        self.assertEqual(w.model.rowCount(),3)
+
+    def test_empty_active_result_never_falls_back_to_full_history(self):
+        w=self.window
+        w.api_token='placeholder'
+        ControlledLoader.created=[]
+        with patch.object(appmod,'Loader',ControlledLoader):
+            w.load_jobs();w.worker.finish([])
+            self.assertEqual(w.session()['jobs'],[])
+            self.assertIn('active',w.session()['batches'])
+            self.assertIsNone(w.worker)
+            w.tabs.setCurrentIndex(1);w.worker.finish([job(9)])
+            w.tabs.setCurrentIndex(0)
+            self.assertIsNone(w.worker)
+        self.assertEqual(w.model.rowCount(),0)
+        self.assertEqual([t.request_state for t in ControlledLoader.created],['active','active'])
+
+    def test_changing_state_during_fetch_queues_only_last_requested_state(self):
+        w=self.window
+        w.api_token='placeholder'
+        ControlledLoader.created=[]
+        with patch.object(appmod,'Loader',ControlledLoader):
+            w.load_jobs();first=w.worker
+            w.states.setCurrentIndex(w.states.findData('done'))
+            w.states.setCurrentIndex(w.states.findData('failed'))
+            self.assertTrue(first.cancelled)
+            self.assertEqual(w.pending_request,(3991,'failed'))
+            # Even a late successful active response must not populate failed view.
+            w.received([job(3)],3991,'active')
+            self.assertEqual(w.model.rowCount(),0)
+            first.finish()
+            self.assertEqual(w.worker.request_state,'failed')
+            w.worker.finish([job(2,'failed')])
+        self.assertEqual(w.current_job['id'],'2')
+        self.assertEqual([t.request_state for t in ControlledLoader.created],['active','failed'])
+        self.assertEqual(w.session()['batches']['active']['jobs'][0]['id'],'3')
+
+    def test_refresh_replaces_active_snapshot_without_merging_history(self):
+        w=self.window
+        w.received([job(1,'done')],3991,'done')
+        w.received([job(3),job(2)],3991,'active')
+        self.assertEqual(w.model.rowCount(),2)
+        w.received([job(2)],3991,'active')
+        self.assertEqual([j['id'] for j in w.model.rows],['2'])
+        self.assertEqual([j['id'] for j in w.session()['batches']['done']['jobs']],['1'])
+        self.assertNotIn('*',w.session()['batches'])
+
+    def test_fresh_all_snapshot_supersedes_older_state_snapshots(self):
+        w=self.window
+        w.received([job(3)],3991,'active')
+        w.received([job(2),job(3,'done')],3991,'*')
+        self.assertEqual(set(w.session()['batches']),{'*'})
+        self.assertEqual(w.current_job['id'],'2')
+        self.assertEqual(w.session()['loaded_state'],'*')
+        w.states.setCurrentIndex(w.states.findData('done'))
+        self.assertEqual(w.current_job['id'],'3')
+
+    def test_cached_state_cancels_queued_history_request(self):
+        w=self.window
+        w.received([job(3)],3991,'active')
+        w.api_token='placeholder'
+        ControlledLoader.created=[]
+        with patch.object(appmod,'Loader',ControlledLoader):
+            w.load_jobs();first=w.worker
+            w.states.setCurrentIndex(w.states.findData('done'))
+            self.assertEqual(w.pending_request,(3991,'done'))
+            w.states.setCurrentIndex(w.states.findData('active'))
+            self.assertIsNone(w.pending_request)
+            first.finish()
+        self.assertEqual(len(ControlledLoader.created),1)
+        self.assertEqual(w.current_job['id'],'3')
+        self.assertIsNone(w.worker)
 
     def test_workflow_tabs_belong_to_base_and_align_left(self):
         w=self.window
@@ -483,6 +582,53 @@ class ApiTests(unittest.TestCase):
     def test_reject_wrong_scope_duplicates_and_drift(self):
         for kw in ({'wrong':True},{'duplicate':True},{'drift':True}):
             with self.assertRaises(RuntimeError):self.run_fetch(**kw)
+
+    def test_server_filter_uses_textual_status_and_paginates_filtered_total(self):
+        for wid in (3991,4156,4157):
+            records=[dict(id=i,workflow_id=wid,name=str(i),state=state) for i,state in
+                     [(5,'active'),(4,'done'),(3,'active'),(2,'failed'),(1,'active')]]
+            calls=[]
+            class Session:
+                def __enter__(self):return self
+                def __exit__(self,*args):pass
+                def post(self,url,data,**kwargs):
+                    calls.append(data.copy())
+                    filtered=[r for r in records if r['state']==data['status']]
+                    page=data['page_id']
+                    obj=dict(code=1,page=page,total_items=len(filtered),items_per_page=2,
+                             jobs=filtered[page*2:page*2+2])
+                    return SimpleNamespace(raise_for_status=lambda:None,json=lambda:obj)
+            with patch.object(appmod.requests,'Session',Session):
+                rows=appmod.fetch_jobs('placeholder',wid,lambda:False,lambda _:None,state='active')
+            self.assertEqual([j['id'] for j in rows],['5','3','1'])
+            self.assertEqual([c['page_id'] for c in calls],[0,1])
+            self.assertTrue(all(c['status']=='active' and 'state' not in c for c in calls))
+
+    def test_ignored_server_state_filter_is_rejected(self):
+        class Session:
+            def __enter__(self):return self
+            def __exit__(self,*args):pass
+            def post(self,url,data,**kwargs):
+                obj=dict(code=1,page=0,total_items=1,items_per_page=100,
+                    jobs=[dict(id=1,workflow_id=3991,name='history',state='done')])
+                return SimpleNamespace(raise_for_status=lambda:None,json=lambda:obj)
+        with patch.object(appmod.requests,'Session',Session),self.assertRaisesRegex(RuntimeError,'bộ lọc trạng thái'):
+            appmod.fetch_jobs('placeholder',3991,lambda:False,lambda _:None,state='active')
+
+    def test_empty_server_filtered_page_is_valid_without_history_fallback(self):
+        calls=[]
+        class Session:
+            def __enter__(self):return self
+            def __exit__(self,*args):pass
+            def post(self,url,data,**kwargs):
+                calls.append(data.copy())
+                obj=dict(code=1,page=0,total_items=0,items_per_page=100,jobs=[])
+                return SimpleNamespace(raise_for_status=lambda:None,json=lambda:obj)
+        with patch.object(appmod.requests,'Session',Session):
+            rows=appmod.fetch_jobs('placeholder',3991,lambda:False,lambda _:None,state='active')
+        self.assertEqual(rows,[])
+        self.assertEqual(len(calls),1)
+        self.assertEqual(calls[0]['status'],'active')
 
     def test_only_specific_website_warnings_are_classified(self):
         fresh="Failed to execute 'postMessage' on 'DOMWindow': The target origin provided ('https://wchat.freshchat.com') does not match the recipient window's origin ('https://workflow.base.vn')."

@@ -146,16 +146,19 @@ def po_candidates(title):
     return list(dict.fromkeys(found))
 
 
-def fetch_jobs(token, workflow_id, cancelled, report):
+def fetch_jobs(token, workflow_id, cancelled, report, state='*'):
     jobs = {}
     with requests.Session() as session:
         def page(number):
             if cancelled():
                 raise RuntimeError('Đã dừng lấy dữ liệu.')
-            response = session.post(API, data={
-                'access_token_v2': token, 'workflow_id': workflow_id,
-                'page_id': number, 'limit': 100,
-            }, timeout=(15, 45), allow_redirects=False)
+            parameters = {'access_token_v2': token, 'workflow_id': workflow_id,
+                          'page_id': number, 'limit': 100}
+            if state != '*':
+                # Base expects the textual state in the parameter named status.
+                parameters['status'] = state
+            response = session.post(API, data=parameters,
+                                    timeout=(15, 45), allow_redirects=False)
             response.raise_for_status()
             obj = response.json()
             if obj.get('code') != 1:
@@ -175,6 +178,8 @@ def fetch_jobs(token, workflow_id, cancelled, report):
             for job in result['jobs']:
                 if int(job['workflow_id']) != workflow_id:
                     raise RuntimeError('API trả nhiệm vụ ngoài workflow đang chọn.')
+                if state != '*' and str(job.get('state') or '') != state:
+                    raise RuntimeError('API không áp dụng đúng bộ lọc trạng thái; không dùng kết quả chưa đầy đủ.')
                 stage = job.get('stage_export') or {}
                 jid = str(int(job['id']))
                 jobs[jid] = {
@@ -194,14 +199,15 @@ class Loader(QThread):
     failed = Signal(str)
     progress = Signal(str)
 
-    def __init__(self, token, workflow_id, parent):
+    def __init__(self, token, workflow_id, parent, state='*'):
         super().__init__(parent)
         self.token, self.workflow_id = token, workflow_id
+        self.request_state = state
 
     def run(self):
         try:
             jobs = fetch_jobs(self.token, self.workflow_id,
-                              self.isInterruptionRequested, self.progress.emit)
+                              self.isInterruptionRequested, self.progress.emit, state=self.request_state)
             if not self.isInterruptionRequested():
                 self.loaded.emit(jobs)
         except requests.RequestException:
@@ -287,14 +293,15 @@ class Window(QMainWindow):
         super().__init__()
         self.api_token = ''
         self.worker = None
-        self.pending_workflow = None
+        self.pending_request = None
         self.closing = False
         self.rendering = False
         self.page_ready = False
         self.current_job = None
         self.current_index = 0
         self.sessions = {wid: {'jobs': None, 'state': 'active', 'query': '',
-            'selected': None, 'expanded': True, 'updated': ''} for _, wid in WORKFLOWS}
+            'selected': None, 'expanded': True, 'updated': '',
+            'batches': {}, 'loaded_state': None} for _, wid in WORKFLOWS}
         self.setWindowTitle('Boston Pharma — Đối chiếu PO / PR — Base & SAP')
         self.setStyleSheet(BRAND_STYLE)
         self.resize(1650, 1000)
@@ -511,7 +518,7 @@ class Window(QMainWindow):
             if token != self.api_token:
                 self.api_token = token
                 for session in self.sessions.values():
-                    session.update(jobs=None, selected=None, updated='')
+                    session.update(jobs=None, selected=None, updated='', batches={}, loaded_state=None)
                 self.api_status.setText('API Base: chưa kiểm tra token mới')
                 self.restore_tab()
             self.load_jobs()
@@ -519,7 +526,7 @@ class Window(QMainWindow):
 
     def change_tab(self, index):
         self.current_index = index
-        self.pending_workflow = None
+        self.pending_request = None
         self.restore_tab()
         self.update_load_controls()
         if self.api_token and self.session()['jobs'] is None:
@@ -528,20 +535,36 @@ class Window(QMainWindow):
     def workflow_label(self, workflow_id):
         return next(name for name, wid in WORKFLOWS if wid == workflow_id)
 
+    def current_request(self):
+        return (WORKFLOWS[self.current_index][1], self.session()['state'])
+
     def update_load_controls(self):
-        current_id = WORKFLOWS[self.current_index][1]
+        target = self.current_request()
         busy_here = self.worker is not None and (
-            self.worker.workflow_id == current_id or self.pending_workflow == current_id)
+            (self.worker.workflow_id, self.worker.request_state) == target
+            or self.pending_request == target)
         self.refresh.setEnabled(not busy_here)
         self.refresh.setText('Đang tải…' if busy_here else 'Làm mới danh sách')
         self.connection.setEnabled(self.worker is None)
 
+    def activate_cached_state(self, session):
+        requested = session['state']
+        cached_state = requested if requested in session['batches'] else '*'
+        cached = session['batches'].get(cached_state)
+        session['jobs'] = cached['jobs'] if cached is not None else None
+        session['updated'] = cached['updated'] if cached is not None else ''
+        session['loaded_state'] = cached_state if cached is not None else None
+
     def restore_tab(self):
         session = self.session()
+        self.activate_cached_state(session)
         self.states.blockSignals(True)
         self.states.clear()
         self.states.addItem('Tất cả trạng thái', '*')
-        states = set(STATE_LABELS) | {j['state'] for j in (session['jobs'] or [])}
+        states = set(STATE_LABELS) | {j['state']
+            for batch in session['batches'].values() for j in batch['jobs']}
+        if session['state'] != '*':
+            states.add(session['state'])
         for state in sorted(states):
             self.states.addItem(state_label(state), state)
         index = self.states.findData(session['state'])
@@ -558,9 +581,17 @@ class Window(QMainWindow):
         self.render_rows()
 
     def filters_changed(self, *_):
-        self.session()['state'] = self.states.currentData()
-        self.session()['query'] = self.search.text()
+        session = self.session()
+        changed = session['state'] != self.states.currentData()
+        session['state'] = self.states.currentData()
+        session['query'] = self.search.text()
+        if changed:
+            self.pending_request = None
+            self.activate_cached_state(session)
         self.render_rows()
+        self.update_load_controls()
+        if changed and self.api_token and session['jobs'] is None:
+            self.load_jobs()
 
     def render_rows(self):
         session = self.session()
@@ -578,7 +609,10 @@ class Window(QMainWindow):
         self.rendering = False
         self.list_toggle.setText(f'Danh sách nhiệm vụ ({len(rows)})')
         suffix = f" · lần lấy: {session['updated']} (giờ Việt Nam)" if session['updated'] else ''
-        self.count.setText(f'{len(rows)} nhiệm vụ hiển thị / {len(jobs)} nhiệm vụ đã lấy' + suffix)
+        scope = ''
+        if session['loaded_state'] is not None:
+            scope = ' · API: ' + ('Tất cả' if session['loaded_state'] == '*' else state_label(session['loaded_state']))
+        self.count.setText(f'{len(rows)} nhiệm vụ hiển thị / {len(jobs)} nhiệm vụ đã lấy' + scope + suffix)
         self.show_job(rows[selected] if selected >= 0 else None)
 
     def toggle_list(self, expanded):
@@ -621,12 +655,13 @@ class Window(QMainWindow):
             self.table.scrollTo(self.model.index(target, 0))
 
     def load_jobs(self):
-        workflow_id = WORKFLOWS[self.current_index][1]
+        workflow_id, requested_state = self.current_request()
         # Keep ownership until the finished signal is processed, even if the
         # native thread has already stopped. This prevents late-signal races.
         if self.worker is not None:
-            if self.worker.workflow_id != workflow_id or self.worker.isInterruptionRequested():
-                self.pending_workflow = workflow_id
+            if ((self.worker.workflow_id, self.worker.request_state) != (workflow_id, requested_state)
+                    or self.worker.isInterruptionRequested()):
+                self.pending_request = (workflow_id, requested_state)
                 self.worker.requestInterruption()
                 self.info.setText('Đang chuyển sang ' + self.workflow_name()
                     + '. Chờ yêu cầu API hiện tại kết thúc…')
@@ -635,38 +670,46 @@ class Window(QMainWindow):
         if not self.api_token:
             self.open_connections()
             return
-        self.api_status.setText('API Base: đang đọc ' + self.workflow_name())
-        worker = Loader(self.api_token, workflow_id, self)
+        self.api_status.setText('API Base: đang đọc ' + self.workflow_name() + ' / ' + str(requested_state))
+        worker = Loader(self.api_token, workflow_id, self, state=requested_state)
         self.worker = worker
-        worker.progress.connect(lambda message, wid=workflow_id: self.load_progress(wid, message))
-        worker.loaded.connect(lambda jobs, wid=workflow_id: self.received(jobs, wid))
-        worker.failed.connect(lambda message, wid=workflow_id: self.load_failed(message, wid))
+        worker.progress.connect(lambda message, wid=workflow_id, state=requested_state: self.load_progress(wid, message, state))
+        worker.loaded.connect(lambda jobs, wid=workflow_id, state=requested_state: self.received(jobs, wid, state))
+        worker.failed.connect(lambda message, wid=workflow_id, state=requested_state: self.load_failed(message, wid, state))
         worker.finished.connect(lambda current=worker: self.load_finished(current))
         self.update_load_controls()
         worker.start()
 
-    def load_progress(self, workflow_id, message):
+    def load_progress(self, workflow_id, message, state=None):
+        if state is None:
+            state = self.session()['state']
         if (self.worker is not None and not self.worker.isInterruptionRequested()
-                and workflow_id == WORKFLOWS[self.current_index][1]):
+                and (workflow_id, state) == self.current_request()):
             self.info.setText(message)
 
-    def received(self, jobs, workflow_id=None):
+    def received(self, jobs, workflow_id=None, state='*'):
         if workflow_id is None:
             workflow_id = WORKFLOWS[self.current_index][1]
         session = self.sessions[workflow_id]
-        session['jobs'] = jobs
-        session['updated'] = datetime.now(timezone(timedelta(hours=7))).strftime('%d/%m/%Y %H:%M:%S')
-        self.api_status.setText('API Base: đã đọc ' + self.workflow_label(workflow_id))
-        # Results always belong to the workflow that initiated the request.
-        if workflow_id == WORKFLOWS[self.current_index][1]:
+        updated = datetime.now(timezone(timedelta(hours=7))).strftime('%d/%m/%Y %H:%M:%S')
+        if state == '*':
+            # A fresh full snapshot supersedes older per-state snapshots.
+            session['batches'].clear()
+        session['batches'][state] = {'jobs': jobs, 'updated': updated}
+        self.activate_cached_state(session)
+        self.api_status.setText('API Base: đã đọc ' + self.workflow_label(workflow_id) + ' / ' + state)
+        if (workflow_id, state) == self.current_request() or (
+                workflow_id == self.current_request()[0] and state == '*' and session['loaded_state'] == '*'):
             self.restore_tab()
-            self.info.setText('Danh sách đã cập nhật. Thao tác trong trang Base là thao tác thật.')
+            self.info.setText('Danh sách đã cập nhật theo trạng thái. Thao tác trong trang Base là thao tác thật.')
 
-    def load_failed(self, message, workflow_id=None):
+    def load_failed(self, message, workflow_id=None, state=None):
         if workflow_id is None:
             workflow_id = WORKFLOWS[self.current_index][1]
+        if state is None:
+            state = self.session()['state']
         self.api_status.setText('API Base: lỗi đọc ' + self.workflow_label(workflow_id))
-        if workflow_id == WORKFLOWS[self.current_index][1]:
+        if (workflow_id, state) == self.current_request():
             self.info.setText(message + (' Đang giữ dữ liệu cũ.' if self.session()['jobs'] is not None else ''))
 
     def load_finished(self, worker):
@@ -674,13 +717,13 @@ class Window(QMainWindow):
             return
         was_cancelled = worker.isInterruptionRequested()
         self.worker = None
-        pending = self.pending_workflow
-        self.pending_workflow = None
+        pending = self.pending_request
+        self.pending_request = None
         worker.deleteLater()
         self.update_load_controls()
         if self.closing:
             self.close()
-        elif pending == WORKFLOWS[self.current_index][1]:
+        elif pending == self.current_request():
             self.load_jobs()
         elif was_cancelled:
             self.api_status.setText('API Base: đã dừng đọc ' + self.workflow_label(worker.workflow_id))

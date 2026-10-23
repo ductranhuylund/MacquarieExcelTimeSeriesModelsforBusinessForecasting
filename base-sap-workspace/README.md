@@ -19,7 +19,7 @@ Hoặc sau khi cài thư viện, mở `run_windows.bat`. Nếu chỉ muốn dùn
 2. Vào **Kết nối → Mở đăng nhập Base**, đăng nhập trực tiếp trên website trong khung trái. Token API và phiên đăng nhập trình duyệt là hai phần độc lập.
 3. Chọn **Nguyên liệu — F011**, **Bao bì — F012**, hoặc **Khác — F013**. Khi đã có token, tab chưa có dữ liệu sẽ tự tải lần đầu; tab đã tải dùng lại danh sách riêng. Các tab luôn bấm được, kể cả lúc API đang tải. Nếu chuyển sang tab chưa tải trong lúc đọc workflow khác, app yêu cầu dừng lượt cũ sau yêu cầu HTTP hiện tại rồi tải tab được chọn cuối cùng. Có thể phải chờ yêu cầu HTTP hiện tại kết thúc; app không gửi đồng thời hàng loạt lượt tải. **Làm mới danh sách** dùng để đọc lại tab đã có dữ liệu.
 4. Ba tab workflow được đặt trong khung Base và căn trái. Lọc theo `state` gốc của Base, tìm theo mã job, PO hoặc tiêu đề; ô tìm kiếm thu gọn để **Làm mới danh sách** và **Danh sách nhiệm vụ** nằm cùng hàng. Bảng chỉ có **Mã job** và **Tiêu đề**, hiển thị trọn 3 dòng rồi cuộn để xem tiếp. Tất cả job vẫn được giữ, không giới hạn danh sách còn 3 job. Chọn một dòng hoặc dùng **Trước / Tiếp theo**; có thể thu gọn bảng.
-5. Bộ lọc, từ tìm kiếm, nhiệm vụ đã chọn và trạng thái mở/thu gọn danh sách được nhớ riêng theo workflow trong phiên chạy. Không lọc theo ngày.
+5. Bộ lọc, từ tìm kiếm, nhiệm vụ đã chọn và trạng thái mở/thu gọn danh sách được nhớ riêng theo workflow trong phiên chạy. Dữ liệu được giữ trong RAM riêng theo cặp workflow và trạng thái; đổi qua lại trạng thái đã tải không gọi lại API. Không lọc theo ngày.
 6. **Tìm nhiệm vụ SAP →** nhận PO từ tiêu đề job đang mở; nếu có nhiều PO, app cho chọn, nếu không nhận diện được thì cho nhập. **Chưa có kết nối SAP: hiện nút chỉ hiển thị yêu cầu tìm kiếm và nguồn PO, không tìm hoặc trả kết quả SAP.**
 7. Có thể kéo thanh chia khung hoặc chọn **Mở rộng Base / Chia đôi / Mở rộng SAP**. **Xem trang Base đầy đủ** thay đổi bố cục hiển thị, không tải lại trang.
 
@@ -34,6 +34,16 @@ Chọn **Cài đặt → Chọn logo Boston Pharma…** để dùng ảnh PNG/JP
 ## Phạm vi lấy dữ liệu
 
 Endpoint đọc: `POST https://workflow.base.vn/extapi/v1/jobs/get`, gửi `access_token_v2`, `workflow_id`, `page_id` bắt đầu từ 0 và `limit=100`.
+
+**Mặc định chỉ tải `active` trực tiếp từ máy chủ**, không tải toàn bộ lịch sử rồi mới lọc trên máy. Tham số API hoạt động là **`status=active`** (chuỗi trạng thái), dù trường dữ liệu trả về tên là `state`. Đã kiểm tra trực tiếp `status=active` với cả 3 workflow và `status=done`/`status=failed` với F013. Trong phép thử, `state=active` và `status=0` không lọc danh sách.
+
+- Chọn **Đang xử lý**: gửi `status=active`.
+- Chọn **Hoàn thành** hoặc **Thất bại**: tải `status=done` hoặc `status=failed` khi cần.
+- Chọn **Tất cả**: bỏ tham số `status`; có thể mất thời gian vì tải toàn bộ lịch sử.
+- Bộ nhớ tạm tách theo workflow/trạng thái, chỉ tồn tại trong phiên chạy. Kết quả 0 job là hợp lệ, không tự chuyển sang tải toàn bộ lịch sử.
+- **Làm mới danh sách** chỉ tải lại trạng thái đang chọn. Tìm kiếm chỉ áp dụng lên dữ liệu trong bộ lọc hiện tại.
+- Mỗi phản hồi được kiểm tra cả `workflow_id` và `state`. Nếu máy chủ không áp dụng đúng trạng thái, app báo lỗi thay vì nhận danh sách chưa đúng hoặc chưa đầy đủ.
+- Nếu đã chủ động tải **Tất cả**, có thể dùng snapshot đó để lọc các trạng thái chưa có snapshot riêng mà không gọi lại API; thời điểm lấy dữ liệu luôn được hiển thị.
 
 | Tab | Workflow ID |
 |---|---:|
@@ -58,7 +68,7 @@ python test_boston_brand.py
 
 Trên Linux không có màn hình, đặt `QT_QPA_PLATFORM=offscreen` khi chạy kiểm thử. Bộ kiểm thử dùng Qt widgets/model thực tế, mô phỏng API và trình duyệt để không gửi dữ liệu hoặc thao tác lên hệ thống thật.
 
-Đã đạt 33 kiểm thử giao diện/logic và 3 kiểm thử nhận diện thương hiệu trên Linux. Có kiểm thử chuyển F011/F012/F013 trong lúc tải, chuyển nhanh nhiều tab, giữ dữ liệu đúng workflow, bỏ qua tiến độ từ lượt cũ và đóng app khi có lượt tải chờ. Ba kiểm thử bố cục mới cũng được chạy lại ở mức phóng đại 150% để kiểm tra hàng nút, tab căn trái và 3 dòng hiển thị. Đã kiểm tra riêng bố cục nhúng bằng Chromium ngoại tuyến. Giao diện/đăng nhập Base trên Windows và SAP cần kiểm tra trong môi trường sử dụng thực tế. Không có token, phiên đăng nhập hoặc dữ liệu xuất từ Base/SAP trong thư mục ứng dụng này.
+Đã đạt 42 kiểm thử giao diện/logic và 3 kiểm thử nhận diện thương hiệu trên Linux. Có thêm kiểm thử tham số `status` dạng chữ, phân trang theo tổng đã lọc, kết quả rỗng, từ chối bộ lọc bị máy chủ bỏ qua, bộ nhớ tạm tách trạng thái và chuyển trạng thái khi đang tải. Có kiểm thử chuyển F011/F012/F013 trong lúc tải, chuyển nhanh nhiều tab, giữ dữ liệu đúng workflow, bỏ qua tiến độ từ lượt cũ và đóng app khi có lượt tải chờ. Ba kiểm thử bố cục mới cũng được chạy lại ở mức phóng đại 150% để kiểm tra hàng nút, tab căn trái và 3 dòng hiển thị. Đã kiểm tra riêng bố cục nhúng bằng Chromium ngoại tuyến. Giao diện/đăng nhập Base trên Windows và SAP cần kiểm tra trong môi trường sử dụng thực tế. Không có token, phiên đăng nhập hoặc dữ liệu xuất từ Base/SAP trong thư mục ứng dụng này.
 
 ## Minh họa bố cục
 
