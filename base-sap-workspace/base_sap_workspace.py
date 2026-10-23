@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 import requests
 from PySide6.QtCore import Qt, QThread, QUrl, Signal, QAbstractTableModel, QModelIndex
-from PySide6.QtGui import QPixmap, QIcon
+from PySide6.QtGui import QPixmap, QIcon, QFont
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLineEdit, QPushButton, QLabel, QComboBox, QTabBar, QSplitter,
@@ -55,10 +55,10 @@ COMPACT_JS = r"""
 
 # Teal palette approximated from the supplied Boston Pharma logo image.
 BRAND_STYLE = """
-QWidget { font-family: "Segoe UI", Arial; font-size: 12px; color: #193C37; }
+QWidget { font-family: "Segoe UI", Arial; font-size: 9pt; color: #193C37; }
 QMainWindow, QDialog { background-color: #F3F8F6; }
 QLabel { background: transparent; }
-QLabel#connectionStatus { color: #50756D; font-size: 11px; }
+QLabel#connectionStatus { color: #50756D; font-size: 8pt; }
 QLineEdit, QComboBox { background: white; border: 1px solid #BCD8D0;
     border-radius: 5px; padding: 6px; selection-background-color: #0C756A; }
 QLineEdit:focus, QComboBox:focus { border: 1px solid #168D80; }
@@ -98,6 +98,37 @@ QMenu::item:selected { background: #DCEFE4; color: #075E54; }
 QComboBox QAbstractItemView { background: white; selection-background-color: #D7EEE3;
     selection-color: #124F43; border: 1px solid #BCD8D0; }
 """
+
+
+
+def console_notice(message):
+    if ("Failed to execute 'postMessage'" in message
+            and 'wchat.freshchat.com' in message and 'origin' in message):
+        return 'freshchat_origin'
+    if ('NotAllowedError' in message and 'play() failed' in message
+            and "user didn't interact" in message):
+        return 'autoplay_blocked'
+    return None
+
+
+class BrowserPage(QWebEnginePage):
+    def __init__(self, profile, parent):
+        super().__init__(profile, parent)
+        self.notices = set()
+
+    def javaScriptConsoleMessage(self, level, message, line, source):
+        notice = console_notice(message)
+        if notice:
+            # Explain each known website warning once; do not disable security
+            # checks, autoplay policy, or unrelated JavaScript error messages.
+            if notice not in self.notices:
+                self.notices.add(notice)
+                text = ('Tiện ích chat Base gặp cảnh báo origin; không phải lỗi API.'
+                        if notice == 'freshchat_origin' else
+                        'Trình duyệt chặn âm thanh tự phát khi chưa tương tác.')
+                print('[Base] ' + text, file=sys.stderr)
+            return
+        super().javaScriptConsoleMessage(level, message, line, source)
 
 
 def state_label(state):
@@ -384,7 +415,7 @@ class Window(QMainWindow):
         self.profile.setPersistentStoragePath(str(data / 'profile'))
         self.profile.setCachePath(str(data / 'cache'))
         self.profile.setPersistentCookiesPolicy(QWebEngineProfile.PersistentCookiesPolicy.AllowPersistentCookies)
-        self.page = QWebEnginePage(self.profile, self.browser)
+        self.page = BrowserPage(self.profile, self.browser)
         self.browser.setPage(self.page)
         self.middle = QWidget()
         self.middle.setFixedWidth(178)
@@ -755,6 +786,7 @@ class Window(QMainWindow):
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
+    app.setFont(QFont('Segoe UI', 9))
     window = Window()
     window.show()
     sys.exit(app.exec())

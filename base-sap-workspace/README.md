@@ -58,10 +58,18 @@ python test_boston_brand.py
 
 Trên Linux không có màn hình, đặt `QT_QPA_PLATFORM=offscreen` khi chạy kiểm thử. Bộ kiểm thử dùng Qt widgets/model thực tế, mô phỏng API và trình duyệt để không gửi dữ liệu hoặc thao tác lên hệ thống thật.
 
-Đã đạt 30 kiểm thử giao diện/logic và 3 kiểm thử nhận diện thương hiệu trên Linux. Có kiểm thử chuyển F011/F012/F013 trong lúc tải, chuyển nhanh nhiều tab, giữ dữ liệu đúng workflow, bỏ qua tiến độ từ lượt cũ và đóng app khi có lượt tải chờ. Ba kiểm thử bố cục mới cũng được chạy lại ở mức phóng đại 150% để kiểm tra hàng nút, tab căn trái và 3 dòng hiển thị. Đã kiểm tra riêng bố cục nhúng bằng Chromium ngoại tuyến. Giao diện/đăng nhập Base trên Windows và SAP cần kiểm tra trong môi trường sử dụng thực tế. Không có token, phiên đăng nhập hoặc dữ liệu xuất từ Base/SAP trong thư mục ứng dụng này.
+Đã đạt 33 kiểm thử giao diện/logic và 3 kiểm thử nhận diện thương hiệu trên Linux. Có kiểm thử chuyển F011/F012/F013 trong lúc tải, chuyển nhanh nhiều tab, giữ dữ liệu đúng workflow, bỏ qua tiến độ từ lượt cũ và đóng app khi có lượt tải chờ. Ba kiểm thử bố cục mới cũng được chạy lại ở mức phóng đại 150% để kiểm tra hàng nút, tab căn trái và 3 dòng hiển thị. Đã kiểm tra riêng bố cục nhúng bằng Chromium ngoại tuyến. Giao diện/đăng nhập Base trên Windows và SAP cần kiểm tra trong môi trường sử dụng thực tế. Không có token, phiên đăng nhập hoặc dữ liệu xuất từ Base/SAP trong thư mục ứng dụng này.
 
 ## Minh họa bố cục
 
 Ảnh sử dụng dữ liệu thử và khung trình duyệt mô phỏng, không phải phản hồi Base/SAP trực tiếp.
 
 ![Bố cục thu gọn: tab trong Base, bảng ba dòng, hai cột](docs/layout-preview.png)
+
+## Các cảnh báo trên cửa sổ CMD
+
+- `QFont::setPointSize ... (-1)` liên quan font Qt. App đã dùng font có cỡ point dương cho các điều khiển native.
+- `postMessage ... wchat.freshchat.com ... origin` là cảnh báo của tiện ích chat trên trang Base.
+- `NotAllowedError: play() ... user did not interact` là trình duyệt chặn phát âm thanh tự động khi chưa có tương tác.
+
+Hai cảnh báo web cụ thể trên được giải thích bằng thông báo ngắn một lần trong CMD thay vì in lặp. Các thông báo JavaScript khác vẫn được chuyển tới console bình thường. Không tắt chính sách bảo mật origin hoặc chính sách phát âm thanh của trình duyệt. Các dòng này không tự chứng minh app bị đóng hoặc API lấy dữ liệu lỗi; nếu người dùng tự đóng cửa sổ rồi thấy CMD, đó có thể là kết thúc bình thường.

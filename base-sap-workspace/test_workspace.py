@@ -1,6 +1,7 @@
 import os
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 import tempfile
+import io
 import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
@@ -87,6 +88,7 @@ class GuiTests(unittest.TestCase):
         self.env.start()
         self.patches = [patch.object(appmod, 'QWebEngineProfile', FakeProfile),
                         patch.object(appmod, 'QWebEnginePage', FakePage),
+                        patch.object(appmod, 'BrowserPage', FakePage),
                         patch.object(appmod, 'QWebEngineView', FakeBrowser)]
         for p in self.patches: p.start()
         self.window = appmod.Window()
@@ -441,6 +443,11 @@ class GuiTests(unittest.TestCase):
         self.assertGreater(w.table.verticalScrollBar().value(),0)
         self.assertLessEqual(w.table.visualRect(w.model.index(4,0)).bottom(),height)
 
+    def test_native_fonts_have_positive_point_sizes(self):
+        w=self.window
+        for widget in (w,w.search,w.api_status,w.table,w.states):
+            self.assertGreater(widget.font().pointSizeF(),0)
+
     def test_table_handles_thousands(self):
         rows=[job(i,'active') for i in range(6000,0,-1)]
         self.populate(rows=rows)
@@ -476,6 +483,28 @@ class ApiTests(unittest.TestCase):
     def test_reject_wrong_scope_duplicates_and_drift(self):
         for kw in ({'wrong':True},{'duplicate':True},{'drift':True}):
             with self.assertRaises(RuntimeError):self.run_fetch(**kw)
+
+    def test_only_specific_website_warnings_are_classified(self):
+        fresh="Failed to execute 'postMessage' on 'DOMWindow': The target origin provided ('https://wchat.freshchat.com') does not match the recipient window's origin ('https://workflow.base.vn')."
+        autoplay="Uncaught (in promise) NotAllowedError: play() failed because the user didn't interact with the document first."
+        self.assertEqual(appmod.console_notice(fresh),'freshchat_origin')
+        self.assertEqual(appmod.console_notice(autoplay),'autoplay_blocked')
+        for other in ('Uncaught TypeError: cannot read property',
+                      "Failed to execute 'postMessage': target origin other.example",
+                      'NotAllowedError: camera permission denied'):
+            self.assertIsNone(appmod.console_notice(other))
+
+    def test_repeated_known_warnings_are_explained_once(self):
+        page=SimpleNamespace(notices=set())
+        fresh="Failed to execute 'postMessage': wchat.freshchat.com target origin mismatch"
+        autoplay="NotAllowedError: play() failed because the user didn't interact"
+        output=io.StringIO()
+        with patch('sys.stderr',output):
+            for _ in range(5):
+                appmod.BrowserPage.javaScriptConsoleMessage(page,None,fresh,0,'')
+                appmod.BrowserPage.javaScriptConsoleMessage(page,None,autoplay,0,'')
+        self.assertEqual(len(output.getvalue().splitlines()),2)
+        self.assertEqual(page.notices,{'freshchat_origin','autoplay_blocked'})
 
     def test_po_recognition(self):
         self.assertEqual(appmod.po_candidates('PO 4500000003 | PR 1000000001'),['4500000003'])
