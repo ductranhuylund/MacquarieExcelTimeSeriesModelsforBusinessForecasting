@@ -868,10 +868,85 @@ class ConnectionDialog(QDialog):
         row.addWidget(close)
 
 
+class WorkSessionDialog(QDialog):
+    """Nonmodal session setup; credentials remain on the native login screens."""
+    def __init__(self, workspace):
+        super().__init__(workspace)
+        self.workspace = workspace
+        self.setWindowTitle('Bắt đầu phiên làm việc — Base & SAP')
+        self.setWindowIcon(workspace.windowIcon())
+        self.resize(620, 460)
+        layout = QVBoxLayout(self)
+        note = QLabel('Kết nối các hệ thống trước khi làm việc. Bạn có thể vào màn hình làm việc khi chỉ một hệ thống sẵn sàng.')
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        layout.addWidget(QLabel('BASE — API và website đăng nhập riêng'))
+        self.api_status = QLabel()
+        self.api_status.setWordWrap(True)
+        self.api_status.setTextFormat(Qt.TextFormat.PlainText)
+        layout.addWidget(self.api_status)
+        self.token = QLineEdit()
+        self.token.setEchoMode(QLineEdit.EchoMode.Password)
+        self.token.setPlaceholderText('Access token v2 — chỉ giữ trong RAM; để trống nếu đã kết nối')
+        layout.addWidget(self.token)
+        self.apply = QPushButton('Kết nối API Base')
+        self.apply.clicked.connect(self.apply_token)
+        layout.addWidget(self.apply)
+        self.base_login = QPushButton('Mở đăng nhập website Base')
+        self.base_login.clicked.connect(workspace.begin_base_login)
+        layout.addWidget(self.base_login)
+        browser_note = QLabel('Website dùng phiên trình duyệt đã lưu nếu còn hợp lệ. Kiểm tra đăng nhập trực tiếp trên trang Base; token API không thay thế đăng nhập website.')
+        browser_note.setWordWrap(True)
+        layout.addWidget(browser_note)
+        layout.addWidget(QLabel('SAP — Đăng nhập, chưa mở ME29N'))
+        self.sap_status = QLabel()
+        self.sap_status.setWordWrap(True)
+        self.sap_status.setTextFormat(Qt.TextFormat.PlainText)
+        layout.addWidget(self.sap_status)
+        self.sap_login = QPushButton('Đăng nhập SAP ' + workspace.sap_controller.entry)
+        self.sap_login.clicked.connect(workspace.begin_sap_login)
+        layout.addWidget(self.sap_login)
+        go = QPushButton('Vào màn hình làm việc')
+        go.clicked.connect(self.accept)
+        layout.addWidget(go)
+        self.timer = QTimer(self)
+        self.timer.setInterval(500)
+        self.timer.timeout.connect(self.refresh_status)
+        self.refresh_status()
+
+    def refresh_status(self):
+        w = self.workspace
+        self.api_status.setText(w.api_status.text())
+        self.sap_status.setText(w.sap_connection_label.text())
+        self.apply.setEnabled(w.worker is None)
+        self.sap_login.setText('Đăng nhập SAP ' + w.sap_controller.entry)
+        self.sap_login.setEnabled(w.sap_controller.mode not in ('engine', 'connection', 'login'))
+
+    def apply_token(self):
+        token = self.token.text().strip()
+        self.token.clear()
+        if not token:
+            self.api_status.setText('Nhập token để kết nối API; token hiện tại được giữ nguyên.')
+            return
+        self.workspace.apply_base_token(token)
+        self.refresh_status()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.refresh_status()
+        self.timer.start()
+
+    def hideEvent(self, event):
+        self.token.clear()
+        self.timer.stop()
+        super().hideEvent(event)
+
+
 class Window(QMainWindow):
     def __init__(self):
         super().__init__()
         self.api_token = ''
+        self.start_dialog = None
         self.worker = None
         self.pending_request = None
         self.closing = False
@@ -1025,15 +1100,17 @@ class Window(QMainWindow):
         right.addWidget(QLabel('SAP — Nhiệm vụ tương ứng'))
         sap_buttons = QHBoxLayout()
         right.addLayout(sap_buttons)
-        self.sap_open = QPushButton('Mở SAP PRD800')
-        self.sap_open.clicked.connect(self.sap_controller.connect_sap)
-        sap_buttons.addWidget(self.sap_open)
-        self.sap_detach = QPushButton('Tách cửa sổ SAP')
-        self.sap_detach.clicked.connect(self.detach_sap)
-        sap_buttons.addWidget(self.sap_detach)
-        self.sap_reattach = QPushButton('Gắn lại SAP')
-        self.sap_reattach.clicked.connect(self.reattach_sap)
-        sap_buttons.addWidget(self.sap_reattach)
+        self.sap_options = QToolButton()
+        self.sap_options.setText('Tùy chọn SAP')
+        self.sap_options.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        sap_menu = QMenu(self.sap_options)
+        sap_menu.addAction('Kết nối phiên làm việc…', self.open_connections)
+        self.sap_open = sap_menu.addAction('Đăng nhập SAP PRD800', self.begin_sap_login)
+        self.sap_detach = sap_menu.addAction('Tách cửa sổ SAP', self.detach_sap)
+        self.sap_reattach = sap_menu.addAction('Gắn lại SAP', self.reattach_sap)
+        self.sap_options.setMenu(sap_menu)
+        sap_buttons.addWidget(self.sap_options)
+        sap_buttons.addStretch()
         self.sap_cancel = QPushButton('Hủy tìm PO')
         self.sap_cancel.clicked.connect(self.sap_controller.cancel_navigation)
         sap_buttons.addWidget(self.sap_cancel)
@@ -1122,6 +1199,39 @@ class Window(QMainWindow):
         return WORKFLOWS[self.current_index][0]
 
     def open_connections(self):
+        if self.start_dialog is None:
+            self.start_dialog = WorkSessionDialog(self)
+        self.start_dialog.show()
+        self.start_dialog.raise_()
+        self.start_dialog.activateWindow()
+
+    def begin_base_login(self):
+        if self.start_dialog is not None:
+            self.start_dialog.hide()
+        self.view_mode.setCurrentIndex(0)
+        self.browser.setUrl(QUrl('https://workflow.base.vn/'))
+
+    def begin_sap_login(self):
+        if self.start_dialog is not None:
+            self.start_dialog.hide()
+        self.view_mode.setCurrentIndex(0)
+        # Login only: cancel any earlier queued search; the Find SAP button
+        # remains the only source of a document-navigation request.
+        self.sap_controller.cancel_navigation()
+        self.sap_controller.connect_sap()
+
+    def apply_base_token(self, token):
+        if not token or self.worker is not None:
+            return
+        if token != self.api_token:
+            self.api_token = token
+            for session in self.sessions.values():
+                session.update(jobs=None, selected=None, updated='', batches={}, loaded_state=None)
+            self.api_status.setText('API Base: chưa kiểm tra token mới')
+            self.restore_tab()
+        self.load_jobs()
+
+    def configure_base_api(self):
         dialog = ConnectionDialog(bool(self.api_token), self)
         result = dialog.exec()
         token = dialog.token.text().strip()
@@ -1129,13 +1239,7 @@ class Window(QMainWindow):
         if result == 2:
             self.browser.setUrl(QUrl('https://workflow.base.vn/'))
         elif result == QDialog.DialogCode.Accepted and token:
-            if token != self.api_token:
-                self.api_token = token
-                for session in self.sessions.values():
-                    session.update(jobs=None, selected=None, updated='', batches={}, loaded_state=None)
-                self.api_status.setText('API Base: chưa kiểm tra token mới')
-                self.restore_tab()
-            self.load_jobs()
+            self.apply_base_token(token)
         dialog.deleteLater()
 
     def change_tab(self, index):
@@ -1412,7 +1516,7 @@ class Window(QMainWindow):
         if dialog.exec() == QDialog.DialogCode.Accepted and path.text().strip() and entry.text().strip():
             self.sap_controller.path = path.text().strip()
             self.sap_controller.entry = entry.text().strip()
-            self.sap_open.setText('Mở SAP ' + self.sap_controller.entry)
+            self.sap_open.setText('Đăng nhập SAP ' + self.sap_controller.entry)
         dialog.deleteLater()
 
     def attach_sap(self, handle):
@@ -1448,6 +1552,7 @@ class Window(QMainWindow):
 
     def update_sap_buttons(self):
         self.sap_cancel.setEnabled(self.sap_controller.navigation_active)
+        self.sap_cancel.setVisible(self.sap_controller.navigation_active)
 
     def reset_sap(self):
         self.sap_request = None
@@ -1514,6 +1619,8 @@ class Window(QMainWindow):
                 self.sap_connection_label.setText('Không tách được SAP. Hãy giữ app mở và thử Tách cửa sổ SAP trước khi đóng.')
                 event.ignore()
                 return
+            if self.start_dialog is not None:
+                self.start_dialog.close()
             self.sap_controller.shutdown()
             self.api_token = ''
             event.accept()
@@ -1524,6 +1631,7 @@ if __name__ == '__main__':
     app.setFont(QFont('Segoe UI', 9))
     window = Window()
     window.show()
+    QTimer.singleShot(0, window.open_connections)
     sys.exit(app.exec())
 
 # HẾT FILE — không cần các file Python cũ.

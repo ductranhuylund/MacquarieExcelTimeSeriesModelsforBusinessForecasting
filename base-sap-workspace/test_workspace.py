@@ -170,6 +170,54 @@ class GuiTests(unittest.TestCase):
         self.assertIsNone(w.sap_host.last_handle)
         self.assertIn('Chưa có cửa sổ SAP', w.sap_connection_label.text())
 
+    def test_session_setup_reuses_one_nonmodal_dialog(self):
+        w = self.window; w.open_connections(); dialog = w.start_dialog
+        self.assertTrue(dialog.isVisible()); self.assertFalse(dialog.isModal())
+        w.open_connections(); self.assertIs(w.start_dialog, dialog)
+        dialog.accept()
+        self.assertTrue(w.isVisible()); self.assertEqual(w.api_token, '')
+    def test_session_sap_login_only_never_requests_po(self):
+        w = self.window; w.open_connections(); dialog = w.start_dialog
+        with patch.object(w.sap_controller, 'connect_sap') as connect:
+            dialog.sap_login.click(); connect.assert_called_once()
+        self.assertFalse(dialog.isVisible())
+        self.assertEqual(w.sap_controller.requests, [])
+        self.assertIsNone(w.sap_request)
+    def test_explicit_sap_login_cancels_old_search(self):
+        w = self.window; w.sap_controller.pending = (1, '4100000001')
+        with patch.object(w.sap_controller, 'connect_sap') as connect:
+            w.begin_sap_login(); connect.assert_called_once()
+        self.assertIsNone(w.sap_controller.pending)
+        self.assertEqual(w.sap_controller.requests, [])
+
+    def test_session_base_login_opens_website_and_clears_unsaved_token(self):
+        w = self.window; w.open_connections(); dialog = w.start_dialog
+        dialog.token.setText('unsaved-placeholder')
+        dialog.base_login.click()
+        self.assertFalse(dialog.isVisible()); self.assertEqual(dialog.token.text(), '')
+        self.assertEqual(w.browser.url().toString(), 'https://workflow.base.vn/')
+        self.assertEqual(w.api_token, '')
+    def test_session_token_applies_without_sap_login(self):
+        w = self.window; w.open_connections(); dialog = w.start_dialog
+        with patch.object(w, 'load_jobs') as load, patch.object(w.sap_controller, 'connect_sap') as sap:
+            dialog.token.setText('placeholder'); dialog.apply.click()
+            load.assert_called_once(); sap.assert_not_called()
+        self.assertEqual(w.api_token, 'placeholder'); self.assertEqual(dialog.token.text(), '')
+        self.assertEqual(dialog.token.echoMode(), appmod.QLineEdit.EchoMode.Password)
+    def test_session_status_refresh_and_sap_menu(self):
+        w = self.window; w.open_connections(); dialog = w.start_dialog
+        w.api_status.setText('API thử nghiệm'); w.sap_connection_label.setText('SAP thử nghiệm')
+        dialog.refresh_status()
+        self.assertEqual(dialog.api_status.text(), 'API thử nghiệm')
+        self.assertEqual(dialog.sap_status.text(), 'SAP thử nghiệm')
+        labels = [action.text() for action in w.sap_options.menu().actions()]
+        self.assertIn('Tách cửa sổ SAP', labels); self.assertIn('Gắn lại SAP', labels)
+        self.assertTrue(w.sap_cancel.isHidden())
+    def test_session_clears_token_and_stops_timer_on_close(self):
+        w = self.window; w.open_connections(); dialog = w.start_dialog
+        dialog.token.setText('unsaved-placeholder'); dialog.reject()
+        self.assertEqual(dialog.token.text(), ''); self.assertFalse(dialog.timer.isActive())
+
     def test_pr_disabled_workflow_names_and_default(self):
         w = self.window
         self.assertFalse(w.business.isTabEnabled(1))
@@ -353,7 +401,7 @@ class GuiTests(unittest.TestCase):
             dialog.exec=lambda:appmod.QDialog.DialogCode.Accepted
             return dialog
         with patch.object(appmod,'ConnectionDialog',side_effect=dialog_factory), patch.object(w,'load_jobs') as load:
-            w.open_connections()
+            w.configure_base_api()
             load.assert_called_once()
         self.assertEqual(w.api_token,'new-placeholder')
         self.assertTrue(all(s['jobs'] is None for s in w.sessions.values()))
