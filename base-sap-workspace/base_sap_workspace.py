@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLineEdit, QPushButton, QLabel, QComboBox, QTabBar, QSplitter,
     QInputDialog, QDialog, QTableView, QAbstractItemView, QHeaderView,
-    QToolButton, QMenu, QFileDialog, QMessageBox, QSizePolicy,
+    QToolButton, QMenu, QFileDialog, QMessageBox, QSizePolicy, QStyle,
 )
 from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage
 from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -906,9 +906,14 @@ class WorkSessionDialog(QDialog):
         self.sap_login = QPushButton('Đăng nhập SAP ' + workspace.sap_controller.entry)
         self.sap_login.clicked.connect(workspace.begin_sap_login)
         layout.addWidget(self.sap_login)
-        go = QPushButton('Vào màn hình làm việc')
-        go.clicked.connect(self.accept)
-        layout.addWidget(go)
+        close_row = QHBoxLayout()
+        close_row.addStretch()
+        close = QPushButton('Đóng')
+        close.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogCloseButton))
+        close.setToolTip('Đóng bảng kết nối để trở lại màn hình làm việc; giữ nguyên các kết nối hiện tại.')
+        close.clicked.connect(self.accept)
+        close_row.addWidget(close)
+        layout.addLayout(close_row)
         self.timer = QTimer(self)
         self.timer.setInterval(500)
         self.timer.timeout.connect(self.refresh_status)
