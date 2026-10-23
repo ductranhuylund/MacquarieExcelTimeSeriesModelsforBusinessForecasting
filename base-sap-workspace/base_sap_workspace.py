@@ -545,6 +545,8 @@ class SapController(QObject):
             if main is not None:
                 handle = str(main.Handle)
                 self.window_ready.emit(int(handle, 16) if handle.lower().startswith('0x') else int(handle))
+                return True
+        return False
 
     def poll(self):
         # COM calls may pump Windows messages while a SAP confirmation is open.
@@ -747,6 +749,7 @@ class SapHost(QWidget):
         super().__init__(parent)
         self.native = None
         self.saved = None
+        self.last_handle = None
         self.setMinimumHeight(250)
         self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow)
         layout = QVBoxLayout(self)
@@ -772,7 +775,15 @@ class SapHost(QWidget):
             # closing the app cannot silently destroy a still-parented SAP window.
             self.detach()
             raise
+        self.last_handle = handle
         self.placeholder.hide()
+
+    def reattach(self):
+        if self.last_handle is None or self.native is None or not self.native.valid(self.last_handle):
+            self.last_handle = None
+            return False
+        self.attach(self.last_handle)
+        return True
 
     def detach(self):
         if self.saved is not None:
@@ -1418,10 +1429,22 @@ class Window(QMainWindow):
             self.sap_connection_label.setText('Chưa tách được cửa sổ SAP. Giữ app mở và thử lại.')
 
     def reattach_sap(self):
+        # Reattach the exact window we previously owned, even if COM lost the
+        # session after a navigation error. Never open a new SAP connection here.
         try:
-            self.sap_controller.show_window()
+            if self.sap_host.reattach():
+                self.sap_connection_label.setText('Đã gắn lại cửa sổ SAP. Kết nối điều khiển và PO cần được kiểm tra riêng.')
+                return
         except Exception:
-            self.sap_connection_label.setText('Chưa tìm được cửa sổ SAP. Kiểm tra SAP Logon và phiên đang mở.')
+            self.sap_connection_label.setText('Chưa gắn được cửa sổ SAP. Kiểm tra SAP và app chạy cùng mức quyền; giữ SAP mở.')
+            return
+        try:
+            if self.sap_controller.show_window():
+                return
+        except Exception:
+            pass
+        self.sap_connection_label.setText('Chưa có cửa sổ SAP hợp lệ để gắn lại. '
+            'Nếu đã đóng SAP, bấm Mở SAP PRD800 để kết nối lại.')
 
     def update_sap_buttons(self):
         self.sap_cancel.setEnabled(self.sap_controller.navigation_active)

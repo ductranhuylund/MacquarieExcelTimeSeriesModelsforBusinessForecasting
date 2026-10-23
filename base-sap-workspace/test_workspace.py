@@ -148,6 +148,28 @@ class GuiTests(unittest.TestCase):
         self.window.restore_tab()
         self.qt.processEvents()
 
+    def test_reattach_uses_original_window_when_com_session_is_missing(self):
+        w = self.window; events = []
+        w.sap_host.native = SimpleNamespace(valid=lambda handle: handle == 123,
+            capture=lambda handle: {'handle': handle},
+            embed=lambda saved, parent: events.append(('embed', saved['handle'])),
+            restore=lambda saved: events.append(('restore', saved['handle'])), resize=lambda *args: None)
+        w.attach_sap(123); w.detach_sap()
+        self.assertIsNone(w.sap_host.saved)
+        w.reattach_sap()
+        self.assertEqual(w.sap_host.saved['handle'], 123)
+        self.assertEqual(events, [('embed',123), ('restore',123), ('embed',123)])
+    def test_reattach_without_window_reports_action_instead_of_silent_noop(self):
+        self.window.reattach_sap()
+        self.assertIn('Chưa có cửa sổ SAP', self.window.sap_connection_label.text())
+    def test_reattach_closed_window_does_not_embed_stale_handle(self):
+        w = self.window
+        w.sap_host.last_handle = 999
+        w.sap_host.native = SimpleNamespace(valid=lambda handle: False)
+        w.reattach_sap()
+        self.assertIsNone(w.sap_host.last_handle)
+        self.assertIn('Chưa có cửa sổ SAP', w.sap_connection_label.text())
+
     def test_pr_disabled_workflow_names_and_default(self):
         w = self.window
         self.assertFalse(w.business.isTabEnabled(1))
