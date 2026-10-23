@@ -48,6 +48,31 @@ class FakeBrowser(QWidget):
     def reload(self): self.setUrl(self.current_url)
 
 
+
+class ControlledLoader(QObject):
+    loaded=Signal(list)
+    failed=Signal(str)
+    progress=Signal(str)
+    finished=Signal()
+    created=[]
+    def __init__(self,token,workflow_id,parent):
+        super().__init__(parent)
+        self.workflow_id=workflow_id
+        self.running=False
+        self.cancelled=False
+        self.created.append(self)
+    def start(self):self.running=True
+    def isRunning(self):return self.running
+    def isInterruptionRequested(self):return self.cancelled
+    def requestInterruption(self):self.cancelled=True
+    def finish(self,rows=None,error=None):
+        self.running=False
+        if not self.cancelled:
+            if error:self.failed.emit(error)
+            elif rows is not None:self.loaded.emit(rows)
+        self.finished.emit()
+
+
 def job(i, state='active', name=None):
     return dict(id=str(i), name=name or f'PO 450000000{i}', state=state,
                 status='0', stage='Duyệt PO')
@@ -238,7 +263,7 @@ class GuiTests(unittest.TestCase):
         w.api_token='placeholder'
         with patch.object(appmod,'fetch_jobs',return_value=[job(3),job(2),job(1,'done')]):
             w.load_jobs()
-            self.assertFalse(w.tabs.isEnabled())
+            self.assertTrue(w.tabs.isEnabled())
             self.assertFalse(w.connection.isEnabled())
             self.assertTrue(w.worker.wait(3000))
             self.qt.processEvents()
@@ -265,6 +290,121 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(w.api_token,'new-placeholder')
         self.assertTrue(all(s['jobs'] is None for s in w.sessions.values()))
         self.assertIsNone(w.current_job)
+
+    def test_tabs_remain_clickable_and_load_f012_f013_on_first_selection(self):
+        w=self.window
+        w.api_token='placeholder'
+        ControlledLoader.created=[]
+        with patch.object(appmod,'Loader',ControlledLoader):
+            w.load_jobs()
+            first=w.worker
+            self.assertTrue(w.tabs.isEnabled())
+            w.tabs.setCurrentIndex(1)
+            self.assertEqual(w.current_index,1)
+            self.assertTrue(first.cancelled)
+            self.assertEqual(w.pending_workflow,4156)
+            first.finish()
+            self.assertEqual(w.worker.workflow_id,4156)
+            w.worker.finish([job(9)])
+            self.assertEqual(w.current_job['id'],'9')
+            self.assertIsNone(w.worker)
+            w.tabs.setCurrentIndex(2)
+            self.assertEqual(w.worker.workflow_id,4157)
+            w.worker.finish([job(8)])
+            self.assertEqual(w.current_job['id'],'8')
+            w.tabs.setCurrentIndex(1)
+            self.assertIsNone(w.worker)
+            self.assertEqual(w.current_job['id'],'9')
+        self.assertEqual([x.workflow_id for x in ControlledLoader.created],[3991,4156,4157])
+
+    def test_rapid_switch_only_fetches_last_requested_tab(self):
+        w=self.window
+        w.api_token='placeholder'
+        ControlledLoader.created=[]
+        with patch.object(appmod,'Loader',ControlledLoader):
+            w.load_jobs();first=w.worker
+            w.tabs.setCurrentIndex(1)
+            w.tabs.setCurrentIndex(2)
+            self.assertEqual(w.pending_workflow,4157)
+            first.finish()
+            self.assertEqual(w.worker.workflow_id,4157)
+            w.worker.finish([job(7)])
+        self.assertEqual([x.workflow_id for x in ControlledLoader.created],[3991,4157])
+        self.assertIsNone(w.sessions[4156]['jobs'])
+        self.assertEqual(w.current_job['id'],'7')
+
+    def test_cached_tab_cancels_pending_fetch_for_another_tab(self):
+        self.populate()
+        w=self.window
+        w.api_token='placeholder'
+        ControlledLoader.created=[]
+        with patch.object(appmod,'Loader',ControlledLoader):
+            w.load_jobs();first=w.worker
+            w.tabs.setCurrentIndex(1)
+            self.assertEqual(w.pending_workflow,4156)
+            w.tabs.setCurrentIndex(0)
+            self.assertIsNone(w.pending_workflow)
+            first.finish()
+        self.assertEqual(len(ControlledLoader.created),1)
+        self.assertEqual(w.current_job['id'],'3')
+        self.assertIsNone(w.worker)
+
+    def test_old_workflow_results_never_replace_visible_other_workflow(self):
+        self.populate(4156,[job(9)])
+        w=self.window
+        w.tabs.setCurrentIndex(1)
+        before=w.browser.url()
+        w.received([job(3)],3991)
+        self.assertEqual(w.current_job['id'],'9')
+        self.assertEqual(w.browser.url(),before)
+        self.assertEqual(w.sessions[3991]['jobs'][0]['id'],'3')
+        self.assertEqual(w.sessions[4156]['jobs'][0]['id'],'9')
+
+    def test_old_progress_ignored_and_api_failure_does_not_lock_tabs(self):
+        w=self.window
+        w.api_token='placeholder'
+        with patch.object(appmod,'Loader',ControlledLoader):
+            w.load_jobs();first=w.worker
+            w.tabs.setCurrentIndex(1)
+            first.progress.emit('WRONG OLD PROGRESS')
+            self.assertNotEqual(w.info.text(),'WRONG OLD PROGRESS')
+            first.finish()
+            w.worker.progress.emit('F012 progress')
+            self.assertEqual(w.info.text(),'F012 progress')
+            w.worker.finish(error='F012 denied')
+        self.assertIn('F012 denied',w.info.text())
+        self.assertTrue(w.tabs.isEnabled())
+        self.assertTrue(w.refresh.isEnabled())
+        self.assertIsNone(w.worker)
+
+    def test_finished_signal_race_waits_for_original_worker_cleanup(self):
+        w=self.window
+        w.api_token='placeholder'
+        ControlledLoader.created=[]
+        with patch.object(appmod,'Loader',ControlledLoader):
+            w.load_jobs();first=w.worker
+            first.running=False  # Native thread stopped; finished signal not processed.
+            w.tabs.setCurrentIndex(1)
+            self.assertIs(w.worker,first)
+            self.assertEqual(len(ControlledLoader.created),1)
+            first.finish()
+            self.assertEqual(w.worker.workflow_id,4156)
+            w.worker.finish([job(9)])
+        self.assertEqual(w.current_job['id'],'9')
+
+    def test_close_while_switching_does_not_launch_pending_fetch(self):
+        w=self.window
+        w.api_token='placeholder'
+        ControlledLoader.created=[]
+        with patch.object(appmod,'Loader',ControlledLoader):
+            w.load_jobs();first=w.worker
+            w.tabs.setCurrentIndex(1)
+            w.close()
+            self.assertTrue(w.closing)
+            first.finish()
+        self.assertEqual(len(ControlledLoader.created),1)
+        self.assertIsNone(w.worker)
+        self.assertFalse(w.isVisible())
 
     def test_workflow_tabs_belong_to_base_and_align_left(self):
         w=self.window
