@@ -125,6 +125,29 @@ class SapTests(unittest.TestCase):
             NS(Type='GuiSimpleContainer', Children=Collection([s.button]))]))
         self.assertEqual(self.run_navigation(s)[0], 'verified')
 
+    def test_text_field_variant_recognized(self):
+        s = Session(); s.Info.Transaction = 'ME29N'; s.open_dialog()
+        field = s.controls.pop('wnd[1]/usr/ctxtMEPO_SELECT-EBELN')
+        s.controls['wnd[1]/usr/txtMEPO_SELECT-EBELN'] = field
+        self.assertEqual(self.run_navigation(s)[0], 'verified')
+    def test_nested_po_field_found_by_name(self):
+        s = Session(); s.Info.Transaction = 'ME29N'; s.open_dialog()
+        field = s.controls.pop('wnd[1]/usr/ctxtMEPO_SELECT-EBELN')
+        s.controls['wnd[1]'].FindByName = lambda name, kind: field
+        self.assertEqual(self.run_navigation(s)[0], 'verified')
+    def test_visible_document_is_reported_separately_from_requested_po(self):
+        s = Session(); s.Info.Transaction = 'ME29N'
+        s.children.append(NS(Type='GuiModalWindow', Id='wnd[2]', Text='Information'))
+        c = m.SapController(); c.session = s; c.mode = 'ready'; c.pending = (1, '4100000001')
+        documents = []; results = []
+        c.document_changed.connect(documents.append)
+        c.navigation_finished.connect(lambda *args: results.append(args))
+        c.poll()
+        self.assertIn('4100000000', documents[-1])
+        self.assertEqual(results[0][2], 'error')
+        self.assertIn('Information', results[0][3])
+        self.assertEqual(s.actions, []); c.shutdown()
+
     def test_host_restores_external_window(self):
         events = []
         host = m.SapHost()

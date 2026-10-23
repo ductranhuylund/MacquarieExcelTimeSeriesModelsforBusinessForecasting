@@ -52,6 +52,7 @@ class FakeBrowser(QWidget):
 
 
 class FakeSapController(QObject):
+    document_changed = Signal(str)
     status_changed=Signal(str)
     window_ready=Signal(object)
     navigation_changed=Signal()

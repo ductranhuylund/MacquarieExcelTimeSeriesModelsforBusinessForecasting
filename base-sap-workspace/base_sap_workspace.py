@@ -263,11 +263,23 @@ class SapNavigator:
         self.deadline = self.clock() + 25
 
     def select_dialog(self, session):
-        modal = sap_find(session, 'wnd[1]')
-        field = sap_find(session, 'wnd[1]/usr/ctxtMEPO_SELECT-EBELN')
-        return (modal, field) if modal is not None and field is not None else (None, None)
+        # SAP themes may expose this as txt/ctxt or nest it in a subscreen.
+        modals = [w for w in sap_children(session) if str(w.Type) == 'GuiModalWindow']
+        for modal in modals:
+            for kind in ('GuiCTextField', 'GuiTextField'):
+                field = sap_named(modal, 'MEPO_SELECT-EBELN', kind)
+                if field is not None:
+                    return modal, field
+            match = re.search(r'wnd\[\d+\]$', str(modal.Id))
+            if match:
+                for prefix in ('ctxt', 'txt'):
+                    field = sap_find(session, match[0] + '/usr/' + prefix + 'MEPO_SELECT-EBELN')
+                    if field is not None:
+                        return modal, field
+        return None, None
 
-    def current_po(self, main):
+    @staticmethod
+    def current_po(main):
         for name in ('MEPO_TOPLINE-EBELN', 'EKKO-EBELN', 'MEPOHEADER-EBELN'):
             for kind in ('GuiCTextField', 'GuiTextField'):
                 field = sap_named(main, name, kind)
@@ -317,7 +329,31 @@ class SapNavigator:
         unexpected_modal = (any(str(w.Id) != str(modal.Id) for w in modals)
                             if modal is not None else bool(modals))
         if unexpected_modal:
-            raise SapNavigationError('SAP đang có hộp thoại khác. Xử lý trực tiếp trên SAP rồi bấm tìm lại.')
+            unknown = next(w for w in modals if modal is None or str(w.Id) != str(modal.Id))
+            try:
+                unknown.SetFocus()  # Show the blocking dialog; never accept/dismiss it.
+            except Exception:
+                pass
+            title = str(getattr(unknown, 'Text', '')).strip()[:160]
+            identifier = str(unknown.Id).split('/')[-1]
+            # Control IDs/types only: do not read input values or password fields.
+            details = []
+            queue = [unknown]
+            visited = 0
+            while queue and visited < 150:
+                node = queue.pop(0)
+                visited += 1
+                kind = str(getattr(node, 'Type', ''))
+                if kind in ('GuiTextField', 'GuiCTextField'):
+                    details.append(str(getattr(node, 'Id', '')).split('/usr/')[-1][:120])
+                try:
+                    queue.extend(sap_children(node))
+                except Exception:
+                    pass
+            fields = ' [Trường: ' + ', '.join(details[:8]) + ']' if details else ''
+            raise SapNavigationError('Chưa mở được PO yêu cầu. Hộp thoại SAP đang chặn: '
+                + identifier + (' — ' + title if title else '') + fields
+                + '. Bấm Tách cửa sổ SAP để xem và xử lý hộp thoại, rồi bấm tìm lại.')
         status = sap_find(session, 'wnd[0]/sbar')
         if self.phase != 'start' and status is not None and str(status.MessageType) in ('E', 'A'):
             raise SapNavigationError('SAP báo lỗi: ' + str(status.Text))
@@ -395,6 +431,7 @@ class SapNavigator:
 
 class SapController(QObject):
     status_changed = Signal(str)
+    document_changed = Signal(str)
     window_ready = Signal(object)
     navigation_changed = Signal()
     navigation_finished = Signal(int, str, str, str)
@@ -494,6 +531,7 @@ class SapController(QObject):
 
     def fail(self, message):
         self.status_changed.emit(message)
+        self.document_changed.emit('Chưa đọc được PO trên SAP; không xác nhận khớp với Base.')
         self.mode = 'disconnected'
         self.opened = False
         self.timer.stop()
@@ -589,6 +627,9 @@ class SapController(QObject):
                 self.mode = 'ready'
                 self.status_changed.emit('SAP đã đăng nhập: ' + str(self.session.Info.SystemName)
                     + ' / client ' + str(self.session.Info.Client) + '. Chỉ mở PO, không tự duyệt.')
+            shown = SapNavigator.current_po(main) if main is not None and transaction.upper() == 'ME29N' else None
+            self.document_changed.emit('PO đang hiển thị trên SAP: ' + shown if shown
+                else 'Chưa đọc được PO đang hiển thị trên SAP.')
             if self.pending is not None:
                 if self.navigator is None:
                     self.navigator = SapNavigator(self.pending[1])
@@ -992,7 +1033,13 @@ class Window(QMainWindow):
         self.sap_po = QLineEdit()
         self.sap_po.setReadOnly(True)
         self.sap_po.setPlaceholderText('PO nhận từ nhiệm vụ Base')
+        right.addWidget(QLabel('PO yêu cầu từ Base (chưa phải xác nhận kết quả SAP):'))
         right.addWidget(self.sap_po)
+        self.sap_actual = QLabel('Chưa đọc được PO đang hiển thị trên SAP.')
+        self.sap_actual.setWordWrap(True)
+        self.sap_actual.setTextFormat(Qt.TextFormat.PlainText)
+        right.addWidget(self.sap_actual)
+        self.sap_controller.document_changed.connect(self.sap_actual.setText)
         self.sap_info = QLabel()
         self.sap_info.setWordWrap(True)
         self.sap_info.setTextFormat(Qt.TextFormat.PlainText)
