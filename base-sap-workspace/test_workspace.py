@@ -154,9 +154,14 @@ class GuiTests(unittest.TestCase):
             capture=lambda handle: {'handle': handle},
             embed=lambda saved, parent: events.append(('embed', saved['handle'])),
             restore=lambda saved: events.append(('restore', saved['handle'])), resize=lambda *args: None)
-        w.attach_sap(123); w.detach_sap()
+        w.attach_sap(123)
+        self.assertEqual(w.sap_window_toggle.text(), 'Mở SAP ở cửa sổ riêng')
+        self.assertTrue(w.sap_window_toggle.isEnabled())
+        w.sap_window_toggle.trigger()
         self.assertIsNone(w.sap_host.saved)
-        w.reattach_sap()
+        self.assertEqual(w.sap_window_toggle.text(), 'Đưa SAP vào khung')
+        w.sap_window_toggle.trigger()
+        self.assertEqual(w.sap_window_toggle.text(), 'Mở SAP ở cửa sổ riêng')
         self.assertEqual(w.sap_host.saved['handle'], 123)
         self.assertEqual(events, [('embed',123), ('restore',123), ('embed',123)])
     def test_reattach_without_window_reports_action_instead_of_silent_noop(self):
@@ -211,7 +216,10 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(dialog.api_status.text(), 'API thử nghiệm')
         self.assertEqual(dialog.sap_status.text(), 'SAP thử nghiệm')
         labels = [action.text() for action in w.sap_options.menu().actions()]
-        self.assertIn('Tách cửa sổ SAP', labels); self.assertIn('Gắn lại SAP', labels)
+        self.assertIn('Đưa SAP vào khung', labels)
+        self.assertNotIn('Tách cửa sổ SAP', labels)
+        self.assertNotIn('Gắn lại SAP', labels)
+        self.assertFalse(w.sap_window_toggle.isEnabled())
         self.assertTrue(w.sap_cancel.isHidden())
     def test_session_clears_token_and_stops_timer_on_close(self):
         w = self.window; w.open_connections(); dialog = w.start_dialog

@@ -1111,8 +1111,7 @@ class Window(QMainWindow):
         sap_menu = QMenu(self.sap_options)
         sap_menu.addAction('Kết nối phiên làm việc…', self.open_connections)
         self.sap_open = sap_menu.addAction('Đăng nhập SAP PRD800', self.begin_sap_login)
-        self.sap_detach = sap_menu.addAction('Tách cửa sổ SAP', self.detach_sap)
-        self.sap_reattach = sap_menu.addAction('Gắn lại SAP', self.reattach_sap)
+        self.sap_window_toggle = sap_menu.addAction('Đưa SAP vào khung', self.toggle_sap_window)
         self.sap_options.setMenu(sap_menu)
         sap_buttons.addWidget(self.sap_options)
         sap_buttons.addStretch()
@@ -1524,18 +1523,29 @@ class Window(QMainWindow):
             self.sap_open.setText('Đăng nhập SAP ' + self.sap_controller.entry)
         dialog.deleteLater()
 
+    def toggle_sap_window(self):
+        if self.sap_host.saved is not None:
+            self.detach_sap()
+        else:
+            self.reattach_sap()
+        self.update_sap_buttons()
+
     def attach_sap(self, handle):
         try:
             self.sap_host.attach(handle)
         except Exception:
             self.sap_connection_label.setText('SAP đã mở nhưng chưa nhúng được cửa sổ. '
-                'Có thể dùng SAP bên ngoài và thử Gắn lại SAP; kiểm tra quyền chạy và DPI của hai ứng dụng.')
+                'Có thể dùng SAP bên ngoài và thử Đưa SAP vào khung; kiểm tra quyền chạy và DPI của hai ứng dụng.')
+        finally:
+            self.update_sap_buttons()
 
     def detach_sap(self):
         try:
             self.sap_host.detach()
         except Exception:
             self.sap_connection_label.setText('Chưa tách được cửa sổ SAP. Giữ app mở và thử lại.')
+        finally:
+            self.update_sap_buttons()
 
     def reattach_sap(self):
         # Reattach the exact window we previously owned, even if COM lost the
@@ -1543,6 +1553,7 @@ class Window(QMainWindow):
         try:
             if self.sap_host.reattach():
                 self.sap_connection_label.setText('Đã gắn lại cửa sổ SAP. Kết nối điều khiển và PO cần được kiểm tra riêng.')
+                self.update_sap_buttons()
                 return
         except Exception:
             self.sap_connection_label.setText('Chưa gắn được cửa sổ SAP. Kiểm tra SAP và app chạy cùng mức quyền; giữ SAP mở.')
@@ -1556,6 +1567,10 @@ class Window(QMainWindow):
             'Nếu đã đóng SAP, bấm Mở SAP PRD800 để kết nối lại.')
 
     def update_sap_buttons(self):
+        embedded = self.sap_host.saved is not None
+        self.sap_window_toggle.setText('Mở SAP ở cửa sổ riêng' if embedded else 'Đưa SAP vào khung')
+        self.sap_window_toggle.setEnabled(embedded or self.sap_host.last_handle is not None
+            or getattr(self.sap_controller, 'session', None) is not None)
         self.sap_cancel.setEnabled(self.sap_controller.navigation_active)
         self.sap_cancel.setVisible(self.sap_controller.navigation_active)
 
