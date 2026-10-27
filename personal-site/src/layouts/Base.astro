@@ -1,0 +1,74 @@
+---
+import '@fontsource-variable/piazzolla/opsz.css';
+import '@fontsource-variable/piazzolla/opsz-italic.css';
+import '@fontsource-variable/commissioner';
+import '../styles/global.css';
+import { site } from '../site';
+interface Props { title?: string; description?: string; active?: string; }
+const { title = site.title, description = site.description, active = 'home' } = Astro.props;
+const links = [ ['home', '/', 'Trang chủ'], ['about', '/gioi-thieu/', 'Về CT'], ['posts', '/bai-viet/', 'Ghi chép'], ['projects', '/du-an/', 'Dự án'], ['contact', '/lien-he/', 'Liên hệ'] ];
+const canonical = Astro.site ? new URL(Astro.url.pathname, Astro.site).href : undefined;
+---
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title><meta name="description" content={description} />
+    {canonical && <link rel="canonical" href={canonical} />}
+    <meta property="og:type" content="website" /><meta property="og:title" content={title} />
+    <meta property="og:description" content={description} /><meta property="og:locale" content="vi_VN" />
+    {canonical && <meta property="og:url" content={canonical} />}
+    {Astro.site && <meta property="og:image" content={new URL('/images/research-desk.png', Astro.site).href} />}
+    <meta name="theme-color" content="#e3804f" /><link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  </head>
+  <body>
+    <a href="#main" class="skip-link">Đến nội dung chính</a>
+    <div class="site-frame">
+      <aside class="rail" aria-label="Nhận diện và chỉ mục">
+        <a href="/" class="wordmark" aria-label="CT — về trang chủ">C<span>T</span><i aria-hidden="true"></i></a>
+        <span class="rail-role">RESEARCHER<br/>QML × MARKETING</span>
+        <div class="ruler" aria-hidden="true"><span class="ruler-progress"></span></div>
+        <nav class="rail-index" aria-label="Chỉ mục trang chủ">
+          <a href="/#bat-dau" data-section="bat-dau"><span>01</span> Khởi đầu</a>
+          <a href="/#ghi-chep" data-section="ghi-chep"><span>02</span> Ghi chép</a>
+          <a href="/#du-an" data-section="du-an"><span>03</span> Thực hành</a>
+          <a href="/#ket-noi" data-section="ket-noi"><span>04</span> Kết nối</a>
+        </nav>
+        <div class="rail-bottom"><span class="tiny-dot"></span> MỘT GÓC NHÌN<br/>ĐANG TIẾP DIỄN</div>
+      </aside>
+      <div class="main-shell">
+        <header class="topbar">
+          <a href="/" class="mobile-name">CT / Journal</a>
+          <span class="issue">GHI CHÉP CÁ NHÂN · SỐ 01</span>
+          <nav aria-label="Điều hướng chính">{links.map(([id, href, label]) => <a href={href} aria-current={active === id ? 'page' : undefined}>{label}</a>)}</nav>
+        </header>
+        <main id="main"><slot /></main>
+        <footer class="footer"><a href="/" class="footer-name">CT<span> / Journal</span></a><p>Quantum methods. Marketing questions.</p><a href="#main">Lên đầu trang ↑</a></footer>
+        <div class="draft-note">Bản dựng đầu tiên · Các bài có nhãn “Bài mẫu” là nội dung minh họa, chưa phải công bố nghiên cứu.</div>
+      </div>
+    </div>
+    <script>
+      const progress = document.querySelector<HTMLElement>('.ruler-progress');
+      let scheduled = false;
+      function updateProgress() {
+        const max = document.documentElement.scrollHeight - window.innerHeight;
+        progress?.style.setProperty('--progress', `${max > 0 ? Math.min(1, window.scrollY / max) : 0}`);
+        scheduled = false;
+      }
+      addEventListener('scroll', () => { if (!scheduled) { scheduled = true; requestAnimationFrame(updateProgress); } }, { passive: true });
+      addEventListener('resize', updateProgress); updateProgress();
+      const sections = document.querySelectorAll<HTMLElement>('[data-home-section]');
+      if (sections.length) {
+        const observer = new IntersectionObserver(entries => {
+          for (const entry of entries) if (entry.isIntersecting) {
+            document.querySelectorAll('.rail-index a').forEach(link => {
+              if (link.getAttribute('data-section') === entry.target.id) link.setAttribute('aria-current', 'location');
+              else link.removeAttribute('aria-current');
+            });
+          }
+        }, { rootMargin: '-10% 0px -45% 0px', threshold: 0 });
+        sections.forEach(section => observer.observe(section));
+      }
+    </script>
+  </body>
+</html>

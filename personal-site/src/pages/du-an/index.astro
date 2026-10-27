@@ -1,0 +1,9 @@
+---
+import { getCollection } from 'astro:content';
+import Base from '../../layouts/Base.astro';
+const projects=(await getCollection('projects')).sort((a,b)=>a.data.number.localeCompare(b.data.number));
+---
+<Base title="Dự án — CT" active="projects">
+<header class="page-heading"><p class="eyebrow">CT / WORK IN PROGRESS</p><h1>Câu hỏi cần được đem ra thử.</h1><p>Công cụ đã có mã nguồn và những đề cương đang hình thành. Mỗi dự án ghi rõ tình trạng để phân biệt điều đã làm với điều dự định làm.</p></header>
+<section class="projects-section">{projects.map(project=><a class="project-row" href={`/du-an/${project.id}/`}><span class="project-number">{project.data.number}</span><div><h3>{project.data.title}</h3><p>{project.data.description}</p></div><span class="project-status">{project.data.status}<br/>{project.data.type}</span><span class="project-arrow" aria-hidden="true"></span></a>)}</section>
+</Base>

@@ -1,0 +1,11 @@
+---
+import { getCollection, render } from 'astro:content';
+import Base from '../../layouts/Base.astro';
+export async function getStaticPaths(){return (await getCollection('projects')).map(project=>({params:{id:project.id},props:{project}}));}
+const { project }=Astro.props;
+const { Content }=await render(project);
+---
+<Base title={`${project.data.title} — CT`} description={project.data.description} active="projects">
+<header class="page-heading"><p class="eyebrow">DỰ ÁN {project.data.number} / {project.data.status}</p><h1>{project.data.title}</h1><p>{project.data.description}</p></header>
+<div class="article-layout"><aside class="article-sidebar"><p>{project.data.type}<br/>{project.data.year}</p>{project.data.repository && <p><a href={project.data.repository} target="_blank" rel="noopener noreferrer">Mã nguồn GitHub </a></p>}<a href="/du-an/">← Các dự án</a></aside><article class="article-body"><Content /><div class="prose-bottom"><a href="/du-an/">← Trở về các dự án</a></div></article></div>
+</Base>

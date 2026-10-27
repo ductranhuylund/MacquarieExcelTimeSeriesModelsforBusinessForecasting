@@ -1,0 +1,46 @@
+---
+import { getCollection } from 'astro:content';
+import { Image } from 'astro:assets';
+import researchDesk from '../assets/research-desk.png';
+import Base from '../layouts/Base.astro';
+import PostCard from '../components/PostCard.astro';
+const posts = (await getCollection('posts')).sort((a,b) => b.data.date.valueOf() - a.data.date.valueOf());
+const projects = (await getCollection('projects')).sort((a,b) => a.data.number.localeCompare(b.data.number));
+---
+<Base>
+  <section class="hero" id="bat-dau" data-home-section>
+    <figure class="hero-art">
+      <Image src={researchDesk} width={800} format="webp" quality={82} alt="Tranh minh họa bàn nghiên cứu: sổ ghi mạch lượng tử, đồ thị, đèn xanh và một tách cà phê." fetchpriority="high" />
+      <figcaption><span>MỘT BÀN LÀM VIỆC. NHIỀU CÂU HỎI.</span><span>FIG. 01 </span></figcaption>
+    </figure>
+    <div class="hero-copy">
+      <p class="eyebrow">CT / A PERSONAL RESEARCH JOURNAL</p>
+      <h1>Tìm điều mới<br/>ở những<br/><em>giao điểm.</em></h1>
+      <p class="hero-description">Tôi nghiên cứu <strong>Quantum Machine Learning</strong> cho Marketing — nơi phương pháp lượng tử gặp những câu hỏi về con người và quyết định.</p>
+      <p class="hero-small">Một nơi để ghi lại điều đang học, thử nghiệm điều chưa biết, và chia sẻ quá trình thay vì chỉ kết quả.</p>
+      <a href="/gioi-thieu/" class="text-link">Một chút về CT </a>
+    </div>
+  </section>
+  <section class="posts-section" id="ghi-chep" data-home-section>
+    <div class="section-kicker">01 / NHỮNG ĐIỀU ĐANG NGHĨ</div>
+    <div class="section-top"><h2>Ghi chép từ bàn làm việc.</h2><a href="/bai-viet/" class="text-link">Tất cả ghi chép </a></div>
+    <div class="post-grid">{posts.slice(0,3).map(post => <PostCard post={post} />)}</div>
+  </section>
+  <section class="approach">
+    <div><p class="eyebrow">MỘT CÁCH TIẾP CẬN</p><h2>Tò mò trước.<br/>Kết luận sau.</h2><p>QML không phải câu trả lời có sẵn cho mọi bài toán Marketing. Điều đáng làm là đặt một câu hỏi rõ, chọn cách so sánh công bằng, rồi để dữ liệu lên tiếng.</p></div>
+    <ol class="principles">
+      <li><span class="number">01</span><div><h3>Bắt đầu từ câu hỏi.</h3><p>Một quyết định Marketing cụ thể, trước khi chọn thuật toán.</p></div></li>
+      <li><span class="number">02</span><div><h3>Đặt cạnh một baseline.</h3><p>Phương pháp mới cần được so sánh với cách giải đơn giản và phù hợp.</p></div></li>
+      <li><span class="number">03</span><div><h3>Ghi lại cả điều chưa được.</h3><p>Giới hạn và kết quả chưa như kỳ vọng cũng là một phần của nghiên cứu.</p></div></li>
+    </ol>
+  </section>
+  <section class="projects-section" id="du-an" data-home-section>
+    <div class="section-kicker">02 / TỪ CÂU HỎI ĐẾN THỰC HÀNH</div>
+    <div class="section-top"><h2>Những thứ đang xây.</h2><a href="/du-an/" class="text-link">Xem các dự án </a></div>
+    {projects.map(project => <a class="project-row" href={`/du-an/${project.id}/`}><span class="project-number">{project.data.number}</span><div><h3>{project.data.title}</h3><p>{project.data.description}</p></div><span class="project-status">{project.data.status}<br/>{project.data.type}</span><span class="project-arrow" aria-hidden="true"></span></a>)}
+  </section>
+  <section class="contact-section" id="ket-noi" data-home-section>
+    <div><p class="eyebrow">03 / CUỘC TRÒ CHUYỆN TIẾP THEO</p><h2>Một câu hỏi hay<br/>luôn có chỗ ở đây.</h2></div>
+    <div><p>Về QML, Marketing, một thử nghiệm mới, hay một góc nhìn khác. Đây là nơi bắt đầu những cuộc trao đổi có chiều sâu.</p><a class="text-link" href="/lien-he/">Thông tin liên hệ </a></div>
+  </section>
+</Base>

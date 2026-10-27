@@ -1,0 +1,9 @@
+---
+import { getCollection } from 'astro:content';
+import Base from '../../layouts/Base.astro';
+const posts = (await getCollection('posts')).sort((a,b)=>b.data.date.valueOf()-a.data.date.valueOf());
+---
+<Base title="Ghi chép — CT" active="posts">
+  <header class="page-heading"><p class="eyebrow">CT / NOTES & QUESTIONS</p><h1>Ghi chép, để nghĩ rõ hơn.</h1><p>Về QML, Marketing và cách biến một câu hỏi thành một thử nghiệm. Những bài có nhãn “Bài mẫu” là nội dung minh họa cho bản website đầu tiên.</p></header>
+  <div class="all-posts">{posts.map(post => <a class="list-post" href={`/bai-viet/${post.id}/`}><span class="list-date">{post.data.date.toLocaleDateString('vi-VN',{timeZone:'Asia/Ho_Chi_Minh'})}</span><div><div class="post-meta">{post.data.category}{post.data.sample && <span class="sample-label">Bài mẫu</span>}</div><h2>{post.data.title}</h2><p>{post.data.description}</p></div><span class="project-arrow" aria-hidden="true"></span></a>)}</div>
+</Base>

@@ -1,0 +1,11 @@
+---
+import type { CollectionEntry } from 'astro:content';
+interface Props { post: CollectionEntry<'posts'>; }
+const { post } = Astro.props;
+---
+<article class="post-card">
+  <div class="post-meta"><span>{post.data.category}</span>{post.data.sample && <span class="sample-label">Bài mẫu</span>}</div>
+  <h3><a href={`/bai-viet/${post.id}/`}>{post.data.title}</a></h3>
+  <p>{post.data.description}</p>
+  <a class="text-link" href={`/bai-viet/${post.id}/`}>Đọc ghi chép <span aria-hidden="true"></span></a>
+</article>

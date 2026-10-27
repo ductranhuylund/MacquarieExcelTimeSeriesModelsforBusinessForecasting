@@ -1,0 +1,11 @@
+---
+import Base from '../layouts/Base.astro';
+import { site } from '../site';
+const hasContact=Boolean(site.email || site.github || site.linkedin);
+---
+<Base title="Liên hệ — CT" active="contact">
+<header class="page-heading"><p class="eyebrow">CT / LET'S COMPARE NOTES</p><h1>Một cuộc trao đổi<br/>có thể bắt đầu từ đây.</h1><p>QML, Marketing, thiết kế thử nghiệm hoặc một dự án có câu hỏi thú vị.</p></header>
+<section class="content-page"><h2>Kết nối với CT.</h2><p>Tôi muốn xây dựng một không gian trao đổi rõ ràng về phương pháp, dữ liệu và những giới hạn của điều chúng ta biết.</p>
+{hasContact ? <div class="contact-list">{site.email&&<a href={`mailto:${site.email}`}>Email </a>}{site.github&&<a href={site.github} rel="noopener noreferrer" target="_blank">GitHub </a>}{site.linkedin&&<a href={site.linkedin} rel="noopener noreferrer" target="_blank">LinkedIn </a>}</div> : <div class="empty-contact"><strong>Thông tin liên hệ sẽ được bổ sung.</strong>CT chưa chọn email hoặc liên kết cá nhân công khai cho bản dựng này.</div>}
+<a class="text-link" href="/du-an/">Trong lúc đó, xem những thứ đang xây </a></section>
+</Base>
