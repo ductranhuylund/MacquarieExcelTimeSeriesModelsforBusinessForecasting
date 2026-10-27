@@ -59,6 +59,24 @@ Tên file là đường dẫn bài. Bài viết được xếp theo ngày giảm
 
 Thông tin học vị, đơn vị công tác và thành tích không được tự tạo. Nội dung giới thiệu dài, các bài mẫu và đề cương cần CT duyệt trước khi công bố như thông tin cá nhân chính thức. Dự án Base × SAP có liên kết mã nguồn thật; website không tuyên bố dự án đó là một nghiên cứu QML.
 
+## Nếu đã tạo Cloudflare Workers thay vì Pages
+
+Project `ct26journal` có thể triển khai cùng website tĩnh bằng **Workers Static Assets**. Không cần thêm Worker xử lý request hoặc đổi app Astro sang SSR.
+
+Repository có `wrangler.jsonc` ở **thư mục gốc**. Cấu hình này tự chạy `npm ci --prefix personal-site` rồi build Astro, sau đó triển khai `personal-site/dist` và dùng trang 404 tùy chỉnh.
+
+| Cài đặt Workers Builds | Giá trị |
+|---|---|
+| Root directory | gốc repository, để trống hoặc `/` |
+| Build command | để trống; Wrangler đã có custom build |
+| Deploy command | `npx wrangler deploy` |
+| Production branch | `main` |
+| Environment variable | `NODE_VERSION=22` |
+
+Tên Worker trong cấu hình là `ct26journal`, khớp tên project ở log. Nếu đổi tên project thì sửa `name` trong `wrangler.jsonc` tương ứng. Sau deploy, dùng URL Cloudflare thực sự cấp; không mặc định đó là địa chỉ `pages.dev`. Thêm `SITE_URL` bằng URL thực rồi deploy lại để có canonical và metadata đầy đủ.
+
+Không đặt Root directory là `personal-site` khi dùng cấu hình Wrangler ở gốc. Nếu muốn dùng Pages theo hướng dẫn dưới, hãy chọn đúng loại Pages project; hai cách đều phục vụ cùng bản build tĩnh.
+
 ## Đưa lên Cloudflare Pages
 
 Mã nguồn đã có thể build, nhưng chưa có website công khai hoặc tên miền nào được tạo tự động.
