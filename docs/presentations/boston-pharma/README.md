@@ -1,9 +1,11 @@
 # Boston Pharma — So sánh Python Workspace và Reply Email
 
-Deck 14 slide, tỷ lệ 16:9, tiếng Việt, cập nhật ngày 27/10/2026.
+Deck 17 slide, tỷ lệ 16:9, tiếng Việt, cập nhật ngày 27/10/2026.
 
 - `Boston_Pharma_So_sanh_Python_Email.pptx`: PowerPoint có thể chỉnh sửa; chữ và sơ đồ là đối tượng native.
 - `Boston_Pharma_So_sanh_Python_Email.pdf`: bản xem nhanh được dựng từ cùng nội dung và bố cục.
+- `screenshots/`: 3 ảnh chụp từ các widget thật của app, sử dụng dịch vụ và dữ liệu mô phỏng. Không phải ảnh kết nối Base/SAP thực tế. Đặt tại slide 6–8.
+- `capture_app.py`: chụp giao diện qua Qt offscreen; cần PySide6 và bộ kiểm thử ứng dụng.
 - `build_deck.py`: mã tạo deck, dùng python-pptx, reportlab, PyMuPDF và Pillow; font DejaVu Sans cho PDF trên Linux.
 
 ## Nguồn và phạm vi

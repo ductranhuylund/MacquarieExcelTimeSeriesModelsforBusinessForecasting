@@ -17,6 +17,7 @@ pdfmetrics.registerFont(TTFont('DV','/usr/share/fonts/truetype/dejavu/DejaVuSans
 pdfmetrics.registerFont(TTFont('DVB','/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'))
 slides=[]; cur=[]; notes=[]
 def box(x,y,w,h,fill,radius=False):cur.append(('box',x,y,w,h,fill,radius))
+def photo(path,x,y,w,h):cur.append(('image',x,y,w,h,str(path)))
 def txt(x,y,w,text,size=18,color=INK,bold=False,leading=None):
     leading=leading or size*1.38
     lines=[]
@@ -98,6 +99,31 @@ txt(566,244,322,'PO đang hiển thị',15,D,True)
 txt(566,279,322,'Nhà cung cấp • giá trị • điều khoản\nKiểm tra đúng PO trước khi duyệt\nDuyệt trực tiếp trong SAP GUI',13,GRAY,False,25)
 band('Điểm kiểm soát quan trọng: tách “PO yêu cầu” khỏi “PO thực tế đang hiển thị”.')
 notes.append('Sơ đồ minh họa bằng shape, không chứa dữ liệu nghiệp vụ hoặc ảnh màn hình thật.')
+
+start('Ảnh chụp app / 01','Bắt đầu phiên: kết nối trước, xử lý sau','Ảnh chụp Qt app hiện tại; dữ liệu và dịch vụ được mô phỏng, không có kết nối SAP thật.')
+photo(OUT/'screenshots/04_session_start_demo.png',58,168,386,316)
+card(478,174,442,122,'BASE','Hai kết nối độc lập','API lấy danh sách; website dùng để xem và duyệt. Token API không thay thế đăng nhập website.')
+card(478,310,442,133,'SAP','Đăng nhập chưa mở ME29N','Chỉ khi bấm “Tìm nhiệm vụ SAP”, app mới mở transaction và tìm PO của job đã chọn.')
+notes.append('Ảnh được capture từ WorkSessionDialog thực trong app, dùng test harness mô phỏng Base/SAP. Không phải ảnh SAP Windows trực tiếp. Tài liệu và sơ đồ gốc vẫn giữ nguyên phạm vi so sánh.')
+
+start('Ảnh chụp app / 02','Hàng đợi Base: chọn workflow và nhiệm vụ','Ảnh chụp widget thật của app; mã PO và nội dung là dữ liệu mẫu.')
+box(40,174,880,308,WHITE,True)
+photo(OUT/'screenshots/02_base_queue_demo.png',54,188,618,258)
+for y,k,title,body in [(190,'01','Chọn workflow','F011 / F012 / F013'),(277,'02','Lọc và tìm kiếm','Theo trạng thái, mã job, PO hoặc tiêu đề.'),(376,'03','Chuyển nhiệm vụ','Chọn dòng hoặc dùng Trước / Tiếp theo.')]:
+ txt(697,y,200,k+' / '+title,12,T,True)
+ txt(697,y+30,195,body,11,GRAY,False,17)
+notes.append('Ảnh chụp vùng hàng đợi của Window.left bằng QWidget.grab. Dữ liệu mẫu, API và browser mô phỏng. Bảng giữ đầy đủ nhiệm vụ; 3 dòng chỉ là vùng hiển thị mặc định.')
+
+start('Ảnh chụp app / 03','Đối chiếu PO yêu cầu với PO đang hiển thị','Ảnh chụp phần thông tin đối chiếu; ví dụ trùng PO được mô phỏng để giải thích giao diện.')
+box(40,173,880,229,WHITE,True)
+photo(OUT/'screenshots/03_sap_match_demo.png',55,183,850,207)
+box(40,418,429,70,M,True)
+txt(55,429,400,'PO yêu cầu từ Base',14,T,True)
+txt(55,456,400,'Đầu vào của lượt tìm kiếm SAP.',12,GRAY)
+box(487,418,433,70,M,True)
+txt(502,429,405,'PO thực tế trên SAP',14,T,True)
+txt(502,456,405,'Phải khớp trước khi người dùng duyệt.',12,GRAY)
+notes.append('Chỉ ảnh widget thông tin của app; giá trị PO thực tế được giả lập, không phải đọc từ SAP trực tiếp.')
 
 start('05 / Phương án B','Email: quyết định đi từ hộp thư vào SAP','Tóm tắt theo tài liệu “MÔ TẢ LUỒNG VẬN HÀNH (FLOW) CƠ CHẾ REPLY EMAIL”.')
 items=[('SAP phát thư','PO đủ điều kiện duyệt; thư có tóm tắt, PDF và Ref Token.'),('Người duyệt Reply','APPROVE / OK hoặc REJECT; lý do ở dòng tiếp theo.'),('Backend kiểm tra','Ghép Ref Token, người gửi, quyền duyệt và trạng thái PO.'),('SAP thực thi','Gọi cơ chế release phù hợp; gửi mail kết quả sau xác nhận.')]
@@ -182,6 +208,10 @@ for idx,objects in enumerate(slides):
             pdf.setFillColor(HexColor(fill));pdf.setStrokeColor(HexColor(fill))
             if rounded:pdf.roundRect(x,H-y-h,w,h,6,fill=1,stroke=0)
             else:pdf.rect(x,H-y-h,w,h,fill=1,stroke=0)
+        elif obj[0]=='image':
+            _,x,y,w,h,path=obj
+            slide.shapes.add_picture(path,Pt(x),Pt(y),width=Pt(w),height=Pt(h))
+            pdf.drawImage(path,x,H-y-h,width=w,height=h,mask='auto')
         else:
             _,x,y,w,line,size,color,bold=obj
             shape=slide.shapes.add_textbox(Pt(x),Pt(y),Pt(w+6),Pt(size*1.5))
@@ -199,7 +229,7 @@ thumbs=[]
 for i,page in enumerate(pdfdoc):
  pix=page.get_pixmap(matrix=fitz.Matrix(.5,.5));im=Image.frombytes('RGB',[pix.width,pix.height],pix.samples)
  im=ImageOps.expand(im,border=8,fill='white');thumbs.append(im)
-contact=Image.new('RGB',(thumbs[0].width*3,thumbs[0].height*5),'#CBD9D4')
+contact=Image.new('RGB',(thumbs[0].width*3,thumbs[0].height*6),'#CBD9D4')
 for i,im in enumerate(thumbs):contact.paste(im,((i%3)*im.width,(i//3)*im.height))
 contact.save('/tmp/boston_deck_contact.png')
 # Validate content bounds, page count and editable PowerPoint structure.
@@ -207,5 +237,5 @@ for n,objects in enumerate(slides,1):
  for o in objects:
   if o[0]=='text':
    assert o[2]+o[5]*1.2 <= H, (n,o)
-assert len(Presentation(OUT/'Boston_Pharma_So_sanh_Python_Email.pptx').slides)==14
+assert len(Presentation(OUT/'Boston_Pharma_So_sanh_Python_Email.pptx').slides)==17
 print('Generated',len(slides),'slides:',[(p.name,p.stat().st_size) for p in OUT.iterdir()])
