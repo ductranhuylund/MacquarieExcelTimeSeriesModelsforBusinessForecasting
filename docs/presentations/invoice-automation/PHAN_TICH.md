@@ -18,6 +18,12 @@ Mục tiêu là giảm việc tải từng hóa đơn, đọc/chuyển thông ti
 - Chọn nhóm hàng/mã thuế là đề xuất theo prompt; cần xác nhận cách ánh xạ với cấu hình kế toán. Tên hàng có thể trùng từ khóa ở nhiều nhóm.
 - Regex, danh sách từ đồng nghĩa, SequenceMatcher và SAP GUI Scripting không phải mô hình Classic ML đã huấn luyện.
 
+## Đọc chữ không đồng nghĩa suy luận nghiệp vụ
+
+PyMuPDF lấy chữ có sẵn, còn OCR nhận diện chữ trong ảnh. OCR có thể dùng mô hình học sâu/ngữ cảnh để đọc chính xác hơn, nhưng tác vụ đọc chữ không tự xác nhận điều kiện kế toán, tính hợp lệ của chứng từ hoặc quyết định được phép ghi nhận.
+
+LLM có thể hỗ trợ suy luận; tuy nhiên source hiện chủ yếu yêu cầu trích xuất, phân loại nhóm hàng và chuẩn hóa trường hóa đơn. Chưa có quy trình suy luận nghiệp vụ có kiểm chứng đủ để tự xác nhận hóa đơn hợp lệ. Regex, fuzzy matching và các điều kiện Python vẫn là logic đã lập trình; kết quả cần đối chiếu và xác nhận.
+
 ## Các vấn đề ưu tiên
 
 ### 1. Cần kiểm tra điều kiện GR/IR

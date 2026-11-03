@@ -1,6 +1,6 @@
 # Mô hình nhập hóa đơn tự động — Boston Pharma
 
-16 slide tiếng Việt cho người không chuyên kỹ thuật, dựa trên tài liệu `Mo_hinh_nhap_hoa_don_tu_dong.txt` do người dùng cung cấp.
+17 slide tiếng Việt cho người không chuyên kỹ thuật, dựa trên tài liệu `Mo_hinh_nhap_hoa_don_tu_dong.txt` do người dùng cung cấp.
 
 - [PowerPoint chỉnh sửa được](https://github.com/ductranhuylund/MacquarieExcelTimeSeriesModelsforBusinessForecasting/raw/refs/heads/main/docs/presentations/invoice-automation/Boston_Nhap_Hoa_Don_Tu_Dong.pptx)
 - [PDF](Boston_Nhap_Hoa_Don_Tu_Dong.pdf)
@@ -47,3 +47,12 @@ Ngưỡng ký tự không phát hiện chắc chắn ảnh scan: trang trống/n
 Đã chạy 5 kiểm thử với tài liệu giả lập: đọc text và giữ định dạng tiền; trang trống; PDF chỉ chứa ảnh; PDF có mật khẩu; file lỗi và tham số sai. Cả 4 khối source gốc được kiểm tra cú pháp bằng AST; điều này không xác nhận chạy được đầu cuối.
 
 Không đưa tài liệu source gốc, phiên đăng nhập, khóa truy cập, đường dẫn cá nhân hoặc chứng từ thật lên thư mục công khai này.
+
+## Phân biệt đọc chữ và reasoning
+
+- PyMuPDF lấy text layer có sẵn; không phải OCR.
+- OCR nhận diện chữ trong ảnh; chức năng này chưa phải suy luận nghiệp vụ.
+- LLM có thể hỗ trợ reasoning, nhưng code đang dùng chủ yếu cho trích xuất, phân loại và chuẩn hóa. Không nên coi mọi lần gọi LLM là reasoning, hoặc coi kết quả JSON là chứng nhận hóa đơn hợp lệ.
+- Phần mềm tính toán/kiểm tra các quy tắc đã lập trình. Người dùng đối chiếu chứng từ, xử lý ngoại lệ và xác nhận nghiệp vụ.
+
+Đã đưa nội dung này vào slide 6 (Reading và Reasoning), trong cả PowerPoint và PDF.
